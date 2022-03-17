@@ -4,7 +4,7 @@
 ./build/bin/clang++ sample.cpp -o sample -g -I /usr/local/cuda/include -lcuda
 
 ## Requirements
-CUDA installed at `/usr/local/cuda`
-`sudo apt install mesa-common-dev`
-llvm installed or linked to ./llvm
+CUDA installed at `/usr/local/cuda`  
+`sudo apt install mesa-common-dev`  
+llvm installed or linked to ./llvm  
 libclc (https://github.com/llvm-mirror/libclc) built (only nvptx) and installed to ./llvm
