@@ -1,0 +1,21 @@
+
+
+#ifndef _CONV_H_
+#define _CONV_H_
+
+#define WIDTH_PADDING 16
+
+#define WIDTH_INPUT 	4096
+#define HEIGHT_INPUT 	4096
+
+#define WIDTH_B		16
+#define HEIGHT_B	16
+
+
+#define WIDTH_A		(WIDTH_INPUT+(WIDTH_B<WIDTH_PADDING?WIDTH_PADDING:WIDTH_B))
+#define HEIGHT_A	(HEIGHT_INPUT+HEIGHT_B)
+
+#define WIDTH_C		WIDTH_INPUT
+#define HEIGHT_C	HEIGHT_INPUT
+
+#endif // _CONV_H_
