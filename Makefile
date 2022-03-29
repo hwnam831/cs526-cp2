@@ -4,7 +4,7 @@ LEVEL = ..
 TARGET=square
 
 ## replace LLVMROOT as appropriate
-LLVMROOT ?= ../project_2/build
+LLVMROOT ?= /home/yaoy4/llvm
 CUDAROOT = /usr/local/cuda
 
 LLVMGCC = $(LLVMROOT)/bin/clang++
