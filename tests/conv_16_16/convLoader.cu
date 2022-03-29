@@ -333,13 +333,13 @@ int main(int argc, char **argv)
 
     // setup execution parameters
     dim3 threads(16, 16);
-    dim3 grid(WIDTH_INPUT / threads.x, HEIGHT_INPUT / threads.y);
+    dim3 grid(WIDTH_C / threads.x, HEIGHT_C / threads.y);
 
     int Width_A = WIDTH_A;
     int Height_A = HEIGHT_A;
     int Width_B = WIDTH_B;
     int Height_B = HEIGHT_B;
-    void *params[] = { &d_A, &d_B, &d_C, &Width_A, &Height_A, &Width_B, &Height_B };
+    void *params[] = { &d_A, &d_B, &d_C, &Width_A, &Height_A, &Height_B, &Width_B };
     // Launch the kernel
     checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
                                    0, NULL, params, NULL)); 
