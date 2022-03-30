@@ -11,8 +11,8 @@ Example configure script (change --prefix and --with-llvm-config accordingly):
 `./configure.py --prefix=/home/hwnam/llvm --with-llvm-config=/home/hwnam/llvm/bin/llvm-config nvptx--nvidiacl nvptx64--nvidiacl`
 
 ## Testing
-`cd tests`
-Run all tests: `make all`
-Clean all files: `make cleanAll`
-Run individial tests: `cd vv && make`
-Clean individial tests: `cd vv && make clean`
+`cd tests`  
+Run all tests: `make all`  
+Clean all files: `make cleanAll`  
+Run individial tests: `cd vv && make`  
+Clean individial tests: `cd vv && make clean`  
