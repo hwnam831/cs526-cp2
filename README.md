@@ -11,6 +11,7 @@ Example configure script (change --prefix and --with-llvm-config accordingly):
 `./configure.py --prefix=/home/hwnam/llvm --with-llvm-config=/home/hwnam/llvm/bin/llvm-config nvptx--nvidiacl nvptx64--nvidiacl`
 
 ## Test Suite
+# The list of algorithms tested in Table 1 of the paper (https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.870.3097&rep=rep1&type=pdf)
 transpose matrix vector (tmv)  
 martrix multiplication (matmul)  
 matrix-vector multiplication (mv)  
