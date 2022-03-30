@@ -303,12 +303,6 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaMalloc((void**) &d_C, out_mem_size));
 
     // copy host memory to device
-<<<<<<< HEAD
-    checkCudaErrors(cudaMemcpy(d_A, h_A, in_mem_size, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_C, h_B, in_mem_size, cudaMemcpyHostToDevice));
-
-//TODO
-=======
     checkCudaErrors(cudaMemcpy((void*) d_A, h_A, in_mem_size, cudaMemcpyHostToDevice));
     checkCudaErrors(cudaMemcpy((void*) d_C, h_B, in_mem_size, cudaMemcpyHostToDevice));
 
@@ -319,18 +313,10 @@ int main(int argc, char **argv)
     }
 
     computeGold(h_A, h_B, num_elements, reference);
->>>>>>> tests
 
     // setup execution parameters
     int block_width = 256;
 
-<<<<<<< HEAD
-    for (int i=0; i<num_elements; i+=block_width) {
-        cublasStrsm('L', 'L', 'N', 'N', block_width, num_elements, 1.0, d_A+i*num_elements+i, num_elements, d_C+i, num_elements);
-        // left matrix (i,i) (i+64, i+64)        right matrix (0,i) (0, i+64)
-
-
-=======
     cublasStrsm('L', 'L', 'N', 'N', num_elements, num_elements, 1.0, (float*)d_A, num_elements, (float*)d_C, num_elements);
     cudaDeviceSynchronize();
     checkCudaErrors(cudaMemcpy(reference, (void*) d_C, out_mem_size, cudaMemcpyDeviceToHost));
@@ -341,7 +327,6 @@ int main(int argc, char **argv)
         cublasStrsm('L', 'L', 'N', 'N', block_width, num_elements, 1.0, (float*)d_A+i*num_elements+i, num_elements, (float*)d_C+i, num_elements);
         // left matrix (i,i) (i+64, i+64)        right matrix (0,i) (0, i+64)
 
->>>>>>> tests
         // strsm to get the result matrix (0,i) (0, i+64)
         // result(0, i+64) (0, h) - left matrix (i, i+64) (i+64,h) * result matrix (0,i) (0, i+64)
         dim3 threads(block_width, 1);
@@ -350,40 +335,20 @@ int main(int argc, char **argv)
         int HC = num_elements;
         dim3 grid(WC / threads.x, HC / threads.y);
 
-<<<<<<< HEAD
-        void *params[] = { d_C+i, d_A+(i+block_width)+i*num_elements, d_C+i+block_width, &block_width, &num_elements };
-        // Launch the kernel
-        checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
-                                       0, NULL, params, NULL)); 
-=======
         int i_val = i;
         void *params[] = { &d_C, &d_A, &d_C, &block_width, &num_elements, &i_val };
         // Launch the kernel
         checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
                                        0, NULL, params, NULL));
->>>>>>> tests
     }
 
     cudaDeviceSynchronize();
     fprintf(stderr, "CUDA kernel launched\n");
     // Copy the result back to the host
-<<<<<<< HEAD
-    checkCudaErrors(cudaMemcpy(h_C, d_C, out_mem_size, cudaMemcpyDeviceToHost));
-
-    // compute reference solution
-    float* reference = (float*) malloc(out_mem_size);
-    if (reference == NULL) {
-        fprintf(stderr, "Could not allocate reference memory\n");
-        exit(-1);
-    }
-    computeGold(h_A, h_B, num_elements, reference);
-
-=======
     checkCudaErrors(cudaMemcpy(h_C, (void*) d_C, out_mem_size, cudaMemcpyDeviceToHost));
 
     // compute reference solution
     
->>>>>>> tests
     int res = checkarray(reference, h_C, num_elements);
     printf("Test %s \n", (res == 0) ? "PASSED" : "FAILED");
 
@@ -392,13 +357,8 @@ int main(int argc, char **argv)
     }
     
     // Cleanup
-<<<<<<< HEAD
-    checkCudaErrors(cudaFree(d_A));
-    checkCudaErrors(cudaFree(d_B));
-=======
     checkCudaErrors(cudaFree((void *) d_A));
     checkCudaErrors(cudaFree((void *) d_B));
->>>>>>> tests
     free(h_A);
     free(h_B);
     free(h_C);
