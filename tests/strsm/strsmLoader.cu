@@ -20,7 +20,6 @@
 #include <iostream>
 #include <fstream>
 #include <cublas.h>
-#include "strsm_gold.cpp"
 
 // This will output the proper CUDA error strings in the event that a CUDA host call returns an error
 #define checkCudaErrors(err)  __checkCudaErrors (err, __FILE__, __LINE__)
@@ -312,7 +311,7 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
-    computeGold(h_A, h_B, num_elements, reference);
+    //computeGold(h_A, h_B, num_elements, reference);
 
     // setup execution parameters
     int block_width = 256;

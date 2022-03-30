@@ -310,7 +310,8 @@ int main(int argc, char **argv)
     if ((h_C = (float*) malloc(mem_size_C)) == NULL) {
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
-    
+    }
+ 
     checkCudaErrors(cuMemAlloc(&d_A, mem_size_A));
     checkCudaErrors(cuMemAlloc(&d_B, mem_size_B));
     checkCudaErrors(cuMemAlloc(&d_C, mem_size_C));
