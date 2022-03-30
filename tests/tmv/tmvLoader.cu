@@ -318,11 +318,6 @@ int main(int argc, char **argv)
     checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size_A));
     checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
 
-<<<<<<< HEAD
-//TODO
-
-=======
->>>>>>> tests
     // setup execution parameters
     dim3 threads(256, 1);
     dim3 grid(WC / threads.x, HC / threads.y);
@@ -332,19 +327,11 @@ int main(int argc, char **argv)
     
     // Launch the kernel
     for (int i=0; i<16; i++) {
-<<<<<<< HEAD
-        cudaThreadSynchronize();
-        // execute the kernel
-        checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1, 0, NULL, params, NULL)); 
-        // stop and destroy timer
-        cudaThreadSynchronize();
-=======
         //cudaThreadSynchronize();
         // execute the kernel
         checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1, 0, NULL, params, NULL)); 
         // stop and destroy timer
         //cudaThreadSynchronize();
->>>>>>> tests
     }
 
     fprintf(stderr, "CUDA kernel launched\n");
