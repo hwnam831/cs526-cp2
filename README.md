@@ -27,4 +27,4 @@ find the regional maxima (imregionmax)
 Run all tests: `make all`  
 Clean all files: `make cleanAll`  
 Run individial test (take tmv for example): `cd tmv && make`  
-Clean individial test (take tmv for example): `cd tmv && make clean`  
+Clean individial test outputs (take tmv for example): `cd tmv && make clean`  
