@@ -4,7 +4,7 @@ LEVEL = ..
 TARGET=square
 
 ## replace LLVMROOT as appropriate
-LLVMROOT ?= ../project_2/build
+LLVMROOT ?= /home/yaoy4/llvm
 CUDAROOT = /usr/local/cuda
 
 LLVMGCC = $(LLVMROOT)/bin/clang++
@@ -19,7 +19,7 @@ LLVMOPT = $(LLVMROOT)/bin/opt
 ## Other choices: test or comparecfe (these will be provided later)
 default: test
 NVCCFLAGS = --cuda-gpu-arch=sm_61 --cuda-path=$(CUDAROOT) -I$(CUDAROOT)/nvvm/include 
-NVCCLIBS = -L$(CUDAROOT)/lib64 -lcudart_static -ldl -lrt -lpthread -lcuda -L$(CUDAROOT)/nvvm/lib64 -lnvvm
+NVCCLIBS = -L$(CUDAROOT)/lib64 -lcudart_static -ldl -lrt -lpthread -lcuda -L$(CUDAROOT)/nvvm/lib64 -lnvvm -lcublas
 CLCFLAGS = -emit-llvm -c -target -nvptx64-nvidial-nvcl -Dcl_clang_storage_class_specifiers\
  -I$(LLVMROOT)/include -include $(LLVMROOT)/include/clc/clc.h -fpack-struct=64 \
  -Xclang -mlink-bitcode-file -Xclang $(LLVMROOT)/lib/clc/nvptx64--nvidiacl.bc -Dcl_khr_fp64  \

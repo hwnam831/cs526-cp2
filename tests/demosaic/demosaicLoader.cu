@@ -19,8 +19,7 @@
 #include <string.h>
 #include <iostream>
 #include <fstream>
-#include "matrixMul.h"
-#include "matrixMul_kernel.cu"
+#include "demosaic.h"
 
 // This will output the proper CUDA error strings in the event that a CUDA host call returns an error
 #define checkCudaErrors(err)  __checkCudaErrors (err, __FILE__, __LINE__)
@@ -171,18 +170,13 @@ char *generatePTX(const char *ll, size_t size, const char *filename)
 }
 
 void
-computeGold(float* C, const float* A, const float* B, unsigned int hA, unsigned int wA, unsigned int wB)
+computeGold(float* r_G, const float* GPU_G, unsigned int wA, unsigned int hA )
 {
-    for (unsigned int i = 0; i < hA; ++i)
-        for (unsigned int j = 0; j < wB; ++j) {
-            double sum = 0;
-            for (unsigned int k = 0; k < wA; ++k) {
-                double a = A[i * wA + k];
-                double b = B[k * wB + j];
-                sum += a * b;
-            }
-            C[i * wB + j] = (float)sum;
+    for (unsigned int i = 0; i < hA-16; ++i){
+        for (unsigned int j = 0; j < wA-16; ++j) {
+           r_G[i*(wA-16)+j] = GPU_G[(i-1+15)*wA+j+15]*0.25 + GPU_G[(i+15)*wA+j-1+15]*0.25 + GPU_G[(i+15)*wA+j+15] + GPU_G[(i+15)*wA+j+1+15]*0.25 + GPU_G[(i+1+15)*wA+j+15]*0.25;
         }
+    }
 }
 
 // Allocates a matrix with random float entries.
@@ -260,9 +254,10 @@ int main(int argc, char **argv)
         return -1;
     }
     
+//TODO
     const char *filename = argv[1];
 
-    
+    /*
     char *ll = loadProgramSource(filename, &size);
     fprintf(stdout, "NVVM IR ll file loaded\n");
 
@@ -270,8 +265,8 @@ int main(int argc, char **argv)
     ptx = loadProgramSource(filename, &size);
     fprintf(stdout, "PTX generated:\n");
     fprintf(stdout, "%s\n", ptx);
-    
-/*
+    */
+
     std::ifstream t(filename);
     if(!t.is_open()) {
         fprintf(stderr, "file not found\n");
@@ -279,33 +274,34 @@ int main(int argc, char **argv)
     }
     std::string str((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
     fprintf(stdout, "%s\n", str.c_str());
-*/
+
     // Initialize the device and get a handle to the kernel
-    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, ptx, argv[2]));
-    
+    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, str.c_str(), "_Z14demosaic_naivePfS_i"));
+
     // set seed for rand()
     srand(2006);
 
     // allocate host memory for matrices A and B
-    unsigned int size_A = WA * HA;
+    unsigned int size_A = WIDTH_A * HEIGHT_A;
     unsigned int mem_size_A = sizeof(float) * size_A;
     if ((h_A = (float*) malloc(mem_size_A)) == NULL) {
-        fprintf(stderr, "Could not allocate host memory\n");
-        exit(-1);
-    }
-    unsigned int size_B = WB * HB;
-    unsigned int mem_size_B = sizeof(float) * size_B;
-    if ((h_B = (float*) malloc(mem_size_B)) == NULL) {
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
 
     // initialize host memory
     randomInit(h_A, size_A);
-    randomInit(h_B, size_B);
+
+    for (int i = 0; i < WIDTH_A; i++) {
+        for (int j = 0; j < HEIGHT_A; j++) {
+            if (i < 15 || j < 15 || i > WIDTH_A - 2 || j > HEIGHT_A - 2) {
+                h_A[j * WIDTH_A + i] = 0.0f;
+            }
+        }
+    }
 
     // allocate device memory for result
-    unsigned int size_C = WC * HC;
+    unsigned int size_C = WIDTH_C * HEIGHT_C;
     unsigned int mem_size_C = sizeof(float) * size_C;
 
     // allocate host memory for the result
@@ -315,23 +311,20 @@ int main(int argc, char **argv)
     }
 
     checkCudaErrors(cuMemAlloc(&d_A, mem_size_A));
-    checkCudaErrors(cuMemAlloc(&d_B, mem_size_B));
     checkCudaErrors(cuMemAlloc(&d_C, mem_size_C));
 
     // copy host memory to device
     checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size_A));
-    checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
 
     // setup execution parameters
     dim3 threads(16, 16);
-    dim3 grid(WC / threads.x, HC / threads.y);
+    dim3 grid(WIDTH_C / threads.x, HEIGHT_C / threads.y);
 
-    int Width_A = WA;
-    int Width_B = WB;
-    void *params[] = { &d_A, &d_B, &d_C, &Width_A, &Width_B };
-    // Launch the kernel
-    checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
-                                   0, NULL, params, NULL)); 
+    int Width_A = WIDTH_A;
+    void *params[] = { &d_A, &d_C, &Width_A };
+    
+    // execute the kernel
+    checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1, 0, NULL, params, NULL)); 
 
     cudaDeviceSynchronize();
     fprintf(stderr, "CUDA kernel launched\n");
@@ -344,13 +337,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "Could not allocate reference memory\n");
         exit(-1);
     }
-    computeGold(reference, h_A, h_B, HA, WA, WB);
+    computeGold(reference, h_A, WIDTH_A, HEIGHT_A);
 
     bool res = cutCompareL2fe(reference, h_C, size_C, 1e-6f);
     printf("Test %s \n", res ? "PASSED" : "FAILED");
 
     if (!res) {
-        //printDiff(reference, h_C,  WC, HC);
+        printDiff(reference, h_C,  WIDTH_C, HEIGHT_C);
     }
     
     // Cleanup
@@ -374,3 +367,4 @@ int main(int argc, char **argv)
     
     return 0;
 }
+

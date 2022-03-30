@@ -19,8 +19,7 @@
 #include <string.h>
 #include <iostream>
 #include <fstream>
-#include "matrixMul.h"
-#include "matrixMul_kernel.cu"
+#include "reduction.h"
 
 // This will output the proper CUDA error strings in the event that a CUDA host call returns an error
 #define checkCudaErrors(err)  __checkCudaErrors (err, __FILE__, __LINE__)
@@ -171,18 +170,17 @@ char *generatePTX(const char *ll, size_t size, const char *filename)
 }
 
 void
-computeGold(float* C, const float* A, const float* B, unsigned int hA, unsigned int wA, unsigned int wB)
+computeGold( float* input, const unsigned int len, float* result)
 {
-    for (unsigned int i = 0; i < hA; ++i)
-        for (unsigned int j = 0; j < wB; ++j) {
-            double sum = 0;
-            for (unsigned int k = 0; k < wA; ++k) {
-                double a = A[i * wA + k];
-                double b = B[k * wB + j];
-                sum += a * b;
-            }
-            C[i * wB + j] = (float)sum;
-        }
+    for(int d = 1; d <= len/2; d *= 2)
+    {
+      for(int i = 0; i < len; i += 2*d)
+      {
+            input[i] = input[i] + input[i + d];
+            //printf("Gold: i:%d, i+d:%d\n", i, i+d);
+      }
+    }
+    result[0] = input[0];
 }
 
 // Allocates a matrix with random float entries.
@@ -260,9 +258,10 @@ int main(int argc, char **argv)
         return -1;
     }
     
+//TODO
     const char *filename = argv[1];
 
-    
+    /*
     char *ll = loadProgramSource(filename, &size);
     fprintf(stdout, "NVVM IR ll file loaded\n");
 
@@ -270,8 +269,8 @@ int main(int argc, char **argv)
     ptx = loadProgramSource(filename, &size);
     fprintf(stdout, "PTX generated:\n");
     fprintf(stdout, "%s\n", ptx);
-    
-/*
+    */
+
     std::ifstream t(filename);
     if(!t.is_open()) {
         fprintf(stderr, "file not found\n");
@@ -279,78 +278,75 @@ int main(int argc, char **argv)
     }
     std::string str((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
     fprintf(stdout, "%s\n", str.c_str());
-*/
-    // Initialize the device and get a handle to the kernel
-    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, ptx, argv[2]));
-    
-    // set seed for rand()
-    srand(2006);
 
-    // allocate host memory for matrices A and B
-    unsigned int size_A = WA * HA;
-    unsigned int mem_size_A = sizeof(float) * size_A;
-    if ((h_A = (float*) malloc(mem_size_A)) == NULL) {
-        fprintf(stderr, "Could not allocate host memory\n");
-        exit(-1);
-    }
-    unsigned int size_B = WB * HB;
-    unsigned int mem_size_B = sizeof(float) * size_B;
-    if ((h_B = (float*) malloc(mem_size_B)) == NULL) {
+    // Initialize the device and get a handle to the kernel
+    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, str.c_str(), "_Z15reduction_naivePfS_i"));
+
+    unsigned int num_elements = INPUT_SIZE;
+
+    // allocate host memory
+    const unsigned int mem_size = sizeof( float) * (num_elements);
+    const unsigned int output_mem_size = sizeof( float) * (num_elements);
+    if ((h_A = (float*) malloc(mem_size)) == NULL) {
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
 
     // initialize host memory
-    randomInit(h_A, size_A);
-    randomInit(h_B, size_B);
-
-    // allocate device memory for result
-    unsigned int size_C = WC * HC;
-    unsigned int mem_size_C = sizeof(float) * size_C;
+    //randomInit(h_A, num_elements);
+    for( unsigned int i = 0; i < num_elements; ++i)
+    {
+        h_A[i] = ((rand()/(float)RAND_MAX));
+    }
 
     // allocate host memory for the result
-    if ((h_C = (float*) malloc(mem_size_C)) == NULL) {
+    if ((h_C = (float*) malloc(output_mem_size)) == NULL) {
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
 
-    checkCudaErrors(cuMemAlloc(&d_A, mem_size_A));
-    checkCudaErrors(cuMemAlloc(&d_B, mem_size_B));
-    checkCudaErrors(cuMemAlloc(&d_C, mem_size_C));
-
-    // copy host memory to device
-    checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size_A));
-    checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
-
-    // setup execution parameters
-    dim3 threads(16, 16);
-    dim3 grid(WC / threads.x, HC / threads.y);
-
-    int Width_A = WA;
-    int Width_B = WB;
-    void *params[] = { &d_A, &d_B, &d_C, &Width_A, &Width_B };
-    // Launch the kernel
-    checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
-                                   0, NULL, params, NULL)); 
-
-    cudaDeviceSynchronize();
-    fprintf(stderr, "CUDA kernel launched\n");
-    // Copy the result back to the host
-    checkCudaErrors(cuMemcpyDtoH(h_C, d_C, mem_size_C));
-
     // compute reference solution
-    float* reference = (float*) malloc(mem_size_C);
+    float* reference = (float*) malloc(output_mem_size);
     if (reference == NULL) {
         fprintf(stderr, "Could not allocate reference memory\n");
         exit(-1);
     }
-    computeGold(reference, h_A, h_B, HA, WA, WB);
+    checkCudaErrors(cuMemAlloc(&d_A, mem_size));
+    checkCudaErrors(cuMemAlloc(&d_C, output_mem_size));
 
-    bool res = cutCompareL2fe(reference, h_C, size_C, 1e-6f);
+    // copy host memory to device
+    checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size));
+
+    // execute the kernel
+    int flip = 0;
+    for (int i=1; i<num_elements; i*=2) {
+        dim3  grid(num_elements/i/2/256, 1, 1);
+        if (grid.x>1024) {
+            grid.y = grid.x/1024;
+            grid.x = 1024;
+        }
+        dim3  threads(256, 1, 1);
+        if (grid.x==0) {
+            grid.x = 1;
+            threads.x = num_elements/i/2;
+        }
+        int num = num_elements/i;
+        void *params[] = { flip?&d_A:&d_C, flip?&d_C:&d_A, &num };
+        checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, grid.z, threads.x, threads.y, threads.z, 0, NULL, params, NULL)); 
+        flip = 1-flip;
+    }
+    // Copy the result back to the host
+    checkCudaErrors(cuMemcpyDtoH(h_C, flip?d_C:d_A, sizeof(float)*1));
+
+    cudaDeviceSynchronize();
+    fprintf(stderr, "CUDA kernel launched\n");
+
+    computeGold( h_A, num_elements, reference);
+    bool res = cutCompareL2fe(reference, h_C, 1, 1e-6f);
     printf("Test %s \n", res ? "PASSED" : "FAILED");
 
     if (!res) {
-        //printDiff(reference, h_C,  WC, HC);
+        printDiff(reference, h_C, 1, 1);
     }
     
     // Cleanup
@@ -374,3 +370,4 @@ int main(int argc, char **argv)
     
     return 0;
 }
+

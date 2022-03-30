@@ -19,8 +19,7 @@
 #include <string.h>
 #include <iostream>
 #include <fstream>
-#include "matrixMul.h"
-#include "matrixMul_kernel.cu"
+#include "tmv.h"
 
 // This will output the proper CUDA error strings in the event that a CUDA host call returns an error
 #define checkCudaErrors(err)  __checkCudaErrors (err, __FILE__, __LINE__)
@@ -173,16 +172,15 @@ char *generatePTX(const char *ll, size_t size, const char *filename)
 void
 computeGold(float* C, const float* A, const float* B, unsigned int hA, unsigned int wA, unsigned int wB)
 {
-    for (unsigned int i = 0; i < hA; ++i)
-        for (unsigned int j = 0; j < wB; ++j) {
-            double sum = 0;
-            for (unsigned int k = 0; k < wA; ++k) {
-                double a = A[i * wA + k];
-                double b = B[k * wB + j];
-                sum += a * b;
-            }
-            C[i * wB + j] = (float)sum;
+    for (unsigned int j = 0; j < wA; ++j) {
+        double sum = 0;
+        for (unsigned int i = 0; i < hA; ++i) {
+            double a = A[i * wA + j];
+            double b = B[i];
+            sum += a * b;
         }
+        C[j] = (float)sum;
+    }
 }
 
 // Allocates a matrix with random float entries.
@@ -260,9 +258,10 @@ int main(int argc, char **argv)
         return -1;
     }
     
+//TODO
     const char *filename = argv[1];
 
-    
+    /*
     char *ll = loadProgramSource(filename, &size);
     fprintf(stdout, "NVVM IR ll file loaded\n");
 
@@ -270,8 +269,8 @@ int main(int argc, char **argv)
     ptx = loadProgramSource(filename, &size);
     fprintf(stdout, "PTX generated:\n");
     fprintf(stdout, "%s\n", ptx);
-    
-/*
+    */
+
     std::ifstream t(filename);
     if(!t.is_open()) {
         fprintf(stderr, "file not found\n");
@@ -279,9 +278,9 @@ int main(int argc, char **argv)
     }
     std::string str((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
     fprintf(stdout, "%s\n", str.c_str());
-*/
+
     // Initialize the device and get a handle to the kernel
-    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, ptx, argv[2]));
+    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, str.c_str(), "_Z9tmv_naivePfS_S_i"));
     
     // set seed for rand()
     srand(2006);
@@ -322,18 +321,24 @@ int main(int argc, char **argv)
     checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size_A));
     checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
 
+//TODO
+
     // setup execution parameters
-    dim3 threads(16, 16);
+    dim3 threads(256, 1);
     dim3 grid(WC / threads.x, HC / threads.y);
 
     int Width_A = WA;
-    int Width_B = WB;
-    void *params[] = { &d_A, &d_B, &d_C, &Width_A, &Width_B };
+    void *params[] = { &d_A, &d_B, &d_C, &Width_A };
+    
     // Launch the kernel
-    checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
-                                   0, NULL, params, NULL)); 
+    for (int i=0; i<16; i++) {
+        cudaThreadSynchronize();
+        // execute the kernel
+        checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1, 0, NULL, params, NULL)); 
+        // stop and destroy timer
+        cudaThreadSynchronize();
+    }
 
-    cudaDeviceSynchronize();
     fprintf(stderr, "CUDA kernel launched\n");
     // Copy the result back to the host
     checkCudaErrors(cuMemcpyDtoH(h_C, d_C, mem_size_C));
@@ -350,7 +355,7 @@ int main(int argc, char **argv)
     printf("Test %s \n", res ? "PASSED" : "FAILED");
 
     if (!res) {
-        //printDiff(reference, h_C,  WC, HC);
+        printDiff(reference, h_C,  WC, HC);
     }
     
     // Cleanup
@@ -374,3 +379,4 @@ int main(int argc, char **argv)
     
     return 0;
 }
+
