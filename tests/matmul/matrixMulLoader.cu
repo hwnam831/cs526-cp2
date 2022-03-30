@@ -350,7 +350,7 @@ int main(int argc, char **argv)
     printf("Test %s \n", res ? "PASSED" : "FAILED");
 
     if (!res) {
-        //printDiff(reference, h_C,  WC, HC);
+        printDiff(reference, h_C,  WC, HC);
     }
     
     // Cleanup
