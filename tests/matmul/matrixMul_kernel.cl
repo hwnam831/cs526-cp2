@@ -14,7 +14,7 @@
 #define A(y,x) A[(y)*WIDTH_A+(x)]
 #define B(y,x) B[(y)*WIDTH_B+(x)]
 #define C(y,x) C[(y)*WIDTH_C+(x)]
-__kernel void matmul(__global float *A, __global float *B, __global float *C, int width, int height) {
+__kernel void matrixMul(__global float *A, __global float *B, __global float *C, int width, int height) {
 	int i;
 	float sum;
 	sum = 0;
