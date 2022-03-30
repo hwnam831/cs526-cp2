@@ -92,6 +92,7 @@ CUresult initCUDA(CUcontext *phContext,
     checkCudaErrors(cuModuleLoadDataEx(phModule, ptx, 0, 0, 0));
 
     // Locate the kernel entry poin
+
     checkCudaErrors(cuModuleGetFunction(phKernel, *phModule, kernelname));
 
 
@@ -219,7 +220,6 @@ void printDiff(float *data1, float *data2, int width, int height)
   }
   printf(" nTotal Errors = %d n", error_count);
 }
-
 #define INPUT_WIDTH 8192
 int main(int argc, char **argv)
 {
@@ -231,12 +231,12 @@ int main(int argc, char **argv)
     CUdevice     hDevice  = 0;
     CUmodule     hModule  = 0;
     CUfunction   hKernel  = 0;
-    CUdeviceptr  d_A   = 0;
-    CUdeviceptr  d_B   = 0;
-    CUdeviceptr  d_C   = 0;
-    float*   h_A   = 0;
-    float*   h_B   = 0;
-    float*   h_C   = 0;
+    float*  d_A   = 0;
+    float*  d_B   = 0;
+    float*  d_C   = 0;
+    float         *h_A   = 0;
+    float         *h_B   = 0;
+    float         *h_C   = 0;
     char        *ptx      = NULL;
     unsigned int i;
 
@@ -249,7 +249,7 @@ int main(int argc, char **argv)
     }
     
     const char *filename = argv[1];
-
+/*
     char *ll = loadProgramSource(filename, &size);
     fprintf(stdout, "NVVM IR ll file loaded\n");
 
@@ -257,7 +257,7 @@ int main(int argc, char **argv)
     ptx = loadProgramSource(filename, &size);
     fprintf(stdout, "PTX generated:\n");
     fprintf(stdout, "%s\n", ptx);
-/*
+*/
     std::ifstream t(filename);
     if(!t.is_open()) {
         fprintf(stderr, "file not found\n");
@@ -265,9 +265,9 @@ int main(int argc, char **argv)
     }
     std::string str((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
     fprintf(stdout, "%s\n", str.c_str());
-*/
+
     // Initialize the device and get a handle to the kernel
-    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, ptx, argv[2] ));
+    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, str.c_str(), "_Z12matrix_naivePfS_S_iii"));
 
     unsigned int num_elements = INPUT_WIDTH;
 
@@ -303,29 +303,18 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaMalloc((void**) &d_C, out_mem_size));
 
     // copy host memory to device
-    checkCudaErrors(cudaMemcpy((void*) d_A, h_A, in_mem_size, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy((void*) d_C, h_B, in_mem_size, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_A, h_A, in_mem_size, cudaMemcpyHostToDevice));
+    checkCudaErrors(cudaMemcpy(d_C, h_B, in_mem_size, cudaMemcpyHostToDevice));
 
-    float* reference = (float*) malloc(out_mem_size);
-    if (reference == NULL) {
-        fprintf(stderr, "Could not allocate reference memory\n");
-        exit(-1);
-    }
-
-    computeGold(h_A, h_B, num_elements, reference);
+//TODO
 
     // setup execution parameters
     int block_width = 256;
-
-    cublasStrsm('L', 'L', 'N', 'N', num_elements, num_elements, 1.0, (float*)d_A, num_elements, (float*)d_C, num_elements);
-    cudaDeviceSynchronize();
-    checkCudaErrors(cudaMemcpy(reference, (void*) d_C, out_mem_size, cudaMemcpyDeviceToHost));
-    checkCudaErrors(cudaMemcpy((void*) d_A, h_A, in_mem_size, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy((void*) d_C, h_B, in_mem_size, cudaMemcpyHostToDevice));
-    
+/*
     for (int i=0; i<num_elements; i+=block_width) {
-        cublasStrsm('L', 'L', 'N', 'N', block_width, num_elements, 1.0, (float*)d_A+i*num_elements+i, num_elements, (float*)d_C+i, num_elements);
+        cublasStrsm('L', 'L', 'N', 'N', block_width, num_elements, 1.0, d_A+i*num_elements+i, num_elements, d_C+i, num_elements);
         // left matrix (i,i) (i+64, i+64)        right matrix (0,i) (0, i+64)
+printf("!!!!!!!!!1\n");
 
         // strsm to get the result matrix (0,i) (0, i+64)
         // result(0, i+64) (0, h) - left matrix (i, i+64) (i+64,h) * result matrix (0,i) (0, i+64)
@@ -335,20 +324,28 @@ int main(int argc, char **argv)
         int HC = num_elements;
         dim3 grid(WC / threads.x, HC / threads.y);
 
-        int i_val = i;
-        void *params[] = { &d_C, &d_A, &d_C, &block_width, &num_elements, &i_val };
+        //void *params[] = { d_C+i, d_A+(i+block_width)+i*num_elements, d_C+i+block_width, &block_width, &num_elements };
+printf("!!!!!!!!!1\n");
         // Launch the kernel
-        checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
-                                       0, NULL, params, NULL));
+        //checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
+        //                               0, NULL, params, NULL));
+printf("!!!!!!!!!1\n");
     }
-
+*/
+cublasStrsm('L', 'L', 'N', 'N', num_elements, num_elements, 1.0, d_A, num_elements, d_C, num_elements);
     cudaDeviceSynchronize();
     fprintf(stderr, "CUDA kernel launched\n");
     // Copy the result back to the host
-    checkCudaErrors(cudaMemcpy(h_C, (void*) d_C, out_mem_size, cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaMemcpy(h_C, d_C, out_mem_size, cudaMemcpyDeviceToHost));
 
     // compute reference solution
-    
+    float* reference = (float*) malloc(out_mem_size);
+    if (reference == NULL) {
+        fprintf(stderr, "Could not allocate reference memory\n");
+        exit(-1);
+    }
+    computeGold(h_A, h_B, num_elements, reference);
+
     int res = checkarray(reference, h_C, num_elements);
     printf("Test %s \n", (res == 0) ? "PASSED" : "FAILED");
 
@@ -357,8 +354,8 @@ int main(int argc, char **argv)
     }
     
     // Cleanup
-    checkCudaErrors(cudaFree((void *) d_A));
-    checkCudaErrors(cudaFree((void *) d_B));
+    checkCudaErrors(cudaFree(d_A));
+    checkCudaErrors(cudaFree(d_B));
     free(h_A);
     free(h_B);
     free(h_C);
