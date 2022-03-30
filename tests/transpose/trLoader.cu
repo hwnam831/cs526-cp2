@@ -19,28 +19,20 @@
 #include <string.h>
 #include <iostream>
 #include <fstream>
-#include <cublas.h>
-#include "strsm_gold.cpp"
+#include "tr.h"
+#include "tr_kernel.cu"
 
 // This will output the proper CUDA error strings in the event that a CUDA host call returns an error
 #define checkCudaErrors(err)  __checkCudaErrors (err, __FILE__, __LINE__)
 
 // These are the inline versions for all of the SDK helper functions
-void __checkCudaErrors( cudaError err, const char *file, const int line )
-{
-    if( cudaSuccess != err) {
-        fprintf(stderr, "%s(%i) : cudaSafeCall() Runtime API error %d: %s.\n",
-                file, line, (int)err, cudaGetErrorString( err ) );
-        exit(-1);
-    }
-}
-
 void __checkCudaErrors( CUresult err, const char *file, const int line )
 {
     if( CUDA_SUCCESS != err) {
         fprintf(stderr, "checkCudaErrors() Driver API error = %04d \from file <%s>, line %i.\n",
                 err, file, line );
-
+        //cudaError_t error = cudaGetLastError();
+        //fprintf(stderr, "%s\n", cudaGetErrorString(error));
         const char *p;
         cuGetErrorString(err, &p);
         fprintf(stderr, "%s\n", p);
@@ -92,6 +84,7 @@ CUresult initCUDA(CUcontext *phContext,
     checkCudaErrors(cuModuleLoadDataEx(phModule, ptx, 0, 0, 0));
 
     // Locate the kernel entry poin
+
     checkCudaErrors(cuModuleGetFunction(phKernel, *phModule, kernelname));
 
 
@@ -177,6 +170,16 @@ char *generatePTX(const char *ll, size_t size, const char *filename)
     return PTX;
 }
 
+void
+computeGold(float* C, const float* A, unsigned int hA, unsigned int wA, unsigned int wB)
+{
+    for (unsigned int j = 0; j < wA; ++j) {
+        for (unsigned int i = 0; i < hA; ++i) {
+            C[j*hA+i]=A[i*wA+j];
+        }
+    }
+}
+
 // Allocates a matrix with random float entries.
 void randomInit(float* data, int size)
 {
@@ -184,24 +187,29 @@ void randomInit(float* data, int size)
         data[i] = rand() / (float)RAND_MAX;
 }
 
-int checkarray(float* reference, float* o_data, int num_elements) {
-    {
-        int error = 0;
-        for (int i=0; i<num_elements; i++) {
-            for (int j=0; j<num_elements; j++) {
-                float t = reference[j*num_elements+i]-o_data[j*num_elements+i];
-                if (t<0) t = -t;
-                float ref = reference[j*num_elements+i];
-                if  (ref<0) ref = -ref;
-                if (t/ref>1e-3) {
-                    if (error<4)
-                        printf("%d, %d, %f, %f\n", i, j, reference[j*num_elements+i], o_data[j*num_elements+i]);
-                    error++;
-                }
-            }
-        }
-        return error;
+// Compare two float arrays using L2-norm with an epsilon tolerance for equality
+// same as cutCompareL2fe in cutil.cpp
+bool cutCompareL2fe( const float* reference, const float* data,
+                const unsigned int len, const float epsilon ) 
+{
+    float error = 0;
+    float ref = 0;
+
+    for( unsigned int i = 0; i < len; ++i) {
+        float diff = reference[i] - data[i];
+        error += diff * diff;
+        ref += reference[i] * reference[i];
     }
+
+    float normRef = sqrtf(ref);
+    if (fabs(ref) < 1e-7) {
+        fprintf(stderr, "ERROR, reference l2-norm is 0\n");
+        return false;
+    }
+    float normError = sqrtf(error);
+    error = normError / normRef;
+
+    return error < epsilon; // l2-norm error is greater than epsilon?
 }
 
 void printDiff(float *data1, float *data2, int width, int height)
@@ -220,7 +228,6 @@ void printDiff(float *data1, float *data2, int width, int height)
   printf(" nTotal Errors = %d n", error_count);
 }
 
-#define INPUT_WIDTH 8192
 int main(int argc, char **argv)
 {
     const unsigned int nThreads = 32;
@@ -234,9 +241,9 @@ int main(int argc, char **argv)
     CUdeviceptr  d_A   = 0;
     CUdeviceptr  d_B   = 0;
     CUdeviceptr  d_C   = 0;
-    float*   h_A   = 0;
-    float*   h_B   = 0;
-    float*   h_C   = 0;
+    float         *h_A   = 0;
+    float         *h_B   = 0;
+    float         *h_C   = 0;
     char        *ptx      = NULL;
     unsigned int i;
 
@@ -267,138 +274,71 @@ int main(int argc, char **argv)
     fprintf(stdout, "%s\n", str.c_str());
 */
     // Initialize the device and get a handle to the kernel
-    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, ptx, argv[2] ));
-
-    unsigned int num_elements = INPUT_WIDTH;
+    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, ptx, argv[2]));
+    
+    // set seed for rand()
+    srand(2006);
 
     // allocate host memory for matrices A and B
-    const unsigned int in_mem_size = sizeof( float) * (num_elements*num_elements);
-    const unsigned int out_mem_size = sizeof( float) * (num_elements*num_elements);
-    if ((h_A = (float*) malloc(in_mem_size)) == NULL) {
-        fprintf(stderr, "Could not allocate host memory\n");
-        exit(-1);
-    }
-    if ((h_B = (float*) malloc(in_mem_size)) == NULL) {
+    unsigned int size_A = WA * HA;
+    unsigned int mem_size_A = sizeof(float) * size_A;
+    if ((h_A = (float*) malloc(mem_size_A)) == NULL) {
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
 
     // initialize host memory
-    for( unsigned int i = 0; i < num_elements; ++i)
-    {
-        for( unsigned int j = 0; j < num_elements; ++j) {
-            h_A[i*num_elements+j] = ((rand()/(float)RAND_MAX));
-            if (i>j) h_A[i*num_elements+j]=0.0f;
-            h_B[i*num_elements+j] = ((rand()/(float)RAND_MAX));
-        }
-    }
+    randomInit(h_A, size_A);
+
+    // allocate device memory for result
+    unsigned int size_C = WC * HC;
+    unsigned int mem_size_C = sizeof(float) * size_C;
 
     // allocate host memory for the result
-    if ((h_C = (float*) malloc(out_mem_size)) == NULL) {
+    if ((h_C = (float*) malloc(mem_size_C)) == NULL) {
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
 
-    checkCudaErrors(cudaMalloc((void**) &d_A, in_mem_size));
-    checkCudaErrors(cudaMalloc((void**) &d_C, out_mem_size));
+    checkCudaErrors(cuMemAlloc(&d_A, mem_size_A));
+    checkCudaErrors(cuMemAlloc(&d_C, mem_size_C));
 
     // copy host memory to device
-<<<<<<< HEAD
-    checkCudaErrors(cudaMemcpy(d_A, h_A, in_mem_size, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy(d_C, h_B, in_mem_size, cudaMemcpyHostToDevice));
-
-//TODO
-=======
-    checkCudaErrors(cudaMemcpy((void*) d_A, h_A, in_mem_size, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy((void*) d_C, h_B, in_mem_size, cudaMemcpyHostToDevice));
-
-    float* reference = (float*) malloc(out_mem_size);
-    if (reference == NULL) {
-        fprintf(stderr, "Could not allocate reference memory\n");
-        exit(-1);
-    }
-
-    computeGold(h_A, h_B, num_elements, reference);
->>>>>>> tests
+    checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size_A));
 
     // setup execution parameters
-    int block_width = 256;
+    dim3 threads(16, 16);
+    dim3 grid(WC / threads.x, HC / threads.y);
 
-<<<<<<< HEAD
-    for (int i=0; i<num_elements; i+=block_width) {
-        cublasStrsm('L', 'L', 'N', 'N', block_width, num_elements, 1.0, d_A+i*num_elements+i, num_elements, d_C+i, num_elements);
-        // left matrix (i,i) (i+64, i+64)        right matrix (0,i) (0, i+64)
-
-
-=======
-    cublasStrsm('L', 'L', 'N', 'N', num_elements, num_elements, 1.0, (float*)d_A, num_elements, (float*)d_C, num_elements);
-    cudaDeviceSynchronize();
-    checkCudaErrors(cudaMemcpy(reference, (void*) d_C, out_mem_size, cudaMemcpyDeviceToHost));
-    checkCudaErrors(cudaMemcpy((void*) d_A, h_A, in_mem_size, cudaMemcpyHostToDevice));
-    checkCudaErrors(cudaMemcpy((void*) d_C, h_B, in_mem_size, cudaMemcpyHostToDevice));
-    
-    for (int i=0; i<num_elements; i+=block_width) {
-        cublasStrsm('L', 'L', 'N', 'N', block_width, num_elements, 1.0, (float*)d_A+i*num_elements+i, num_elements, (float*)d_C+i, num_elements);
-        // left matrix (i,i) (i+64, i+64)        right matrix (0,i) (0, i+64)
-
->>>>>>> tests
-        // strsm to get the result matrix (0,i) (0, i+64)
-        // result(0, i+64) (0, h) - left matrix (i, i+64) (i+64,h) * result matrix (0,i) (0, i+64)
-        dim3 threads(block_width, 1);
-        int WC = num_elements - i - block_width;
-        if (WC==0) break;
-        int HC = num_elements;
-        dim3 grid(WC / threads.x, HC / threads.y);
-
-<<<<<<< HEAD
-        void *params[] = { d_C+i, d_A+(i+block_width)+i*num_elements, d_C+i+block_width, &block_width, &num_elements };
-        // Launch the kernel
-        checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
-                                       0, NULL, params, NULL)); 
-=======
-        int i_val = i;
-        void *params[] = { &d_C, &d_A, &d_C, &block_width, &num_elements, &i_val };
-        // Launch the kernel
-        checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
-                                       0, NULL, params, NULL));
->>>>>>> tests
-    }
+    int Width_A = WA;
+    void *params[] = { &d_A, &d_C, &Width_A };
+    // Launch the kernel
+    checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
+                                   0, NULL, params, NULL)); 
 
     cudaDeviceSynchronize();
     fprintf(stderr, "CUDA kernel launched\n");
     // Copy the result back to the host
-<<<<<<< HEAD
-    checkCudaErrors(cudaMemcpy(h_C, d_C, out_mem_size, cudaMemcpyDeviceToHost));
+    checkCudaErrors(cuMemcpyDtoH(h_C, d_C, mem_size_C));
 
     // compute reference solution
-    float* reference = (float*) malloc(out_mem_size);
+    float* reference = (float*) malloc(mem_size_C);
     if (reference == NULL) {
         fprintf(stderr, "Could not allocate reference memory\n");
         exit(-1);
     }
-    computeGold(h_A, h_B, num_elements, reference);
+    computeGold(reference, h_A, HA, WA, WB);
 
-=======
-    checkCudaErrors(cudaMemcpy(h_C, (void*) d_C, out_mem_size, cudaMemcpyDeviceToHost));
+    bool res = cutCompareL2fe(reference, h_C, size_C, 1e-6f);
+    printf("Test %s \n", res ? "PASSED" : "FAILED");
 
-    // compute reference solution
-    
->>>>>>> tests
-    int res = checkarray(reference, h_C, num_elements);
-    printf("Test %s \n", (res == 0) ? "PASSED" : "FAILED");
-
-    if (res != 0) {
-        printDiff(reference, h_C,  num_elements, num_elements);
+    if (!res) {
+        printDiff(reference, h_C,  WC, HC);
     }
     
     // Cleanup
-<<<<<<< HEAD
-    checkCudaErrors(cudaFree(d_A));
-    checkCudaErrors(cudaFree(d_B));
-=======
-    checkCudaErrors(cudaFree((void *) d_A));
-    checkCudaErrors(cudaFree((void *) d_B));
->>>>>>> tests
+    checkCudaErrors(cuMemFree(d_A));
+    checkCudaErrors(cuMemFree(d_B));
     free(h_A);
     free(h_B);
     free(h_C);

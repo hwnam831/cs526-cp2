@@ -258,10 +258,8 @@ int main(int argc, char **argv)
         return -1;
     }
     
-//TODO
     const char *filename = argv[1];
 
-    /*
     char *ll = loadProgramSource(filename, &size);
     fprintf(stdout, "NVVM IR ll file loaded\n");
 
@@ -269,8 +267,7 @@ int main(int argc, char **argv)
     ptx = loadProgramSource(filename, &size);
     fprintf(stdout, "PTX generated:\n");
     fprintf(stdout, "%s\n", ptx);
-    */
-
+/*
     std::ifstream t(filename);
     if(!t.is_open()) {
         fprintf(stderr, "file not found\n");
@@ -278,9 +275,9 @@ int main(int argc, char **argv)
     }
     std::string str((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
     fprintf(stdout, "%s\n", str.c_str());
-
+*/
     // Initialize the device and get a handle to the kernel
-    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, str.c_str(), "_Z9tmv_naivePfS_S_i"));
+    checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, ptx, argv[2]));
     
     // set seed for rand()
     srand(2006);
@@ -321,8 +318,11 @@ int main(int argc, char **argv)
     checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size_A));
     checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
 
+<<<<<<< HEAD
 //TODO
 
+=======
+>>>>>>> tests
     // setup execution parameters
     dim3 threads(256, 1);
     dim3 grid(WC / threads.x, HC / threads.y);
@@ -332,11 +332,19 @@ int main(int argc, char **argv)
     
     // Launch the kernel
     for (int i=0; i<16; i++) {
+<<<<<<< HEAD
         cudaThreadSynchronize();
         // execute the kernel
         checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1, 0, NULL, params, NULL)); 
         // stop and destroy timer
         cudaThreadSynchronize();
+=======
+        //cudaThreadSynchronize();
+        // execute the kernel
+        checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1, 0, NULL, params, NULL)); 
+        // stop and destroy timer
+        //cudaThreadSynchronize();
+>>>>>>> tests
     }
 
     fprintf(stderr, "CUDA kernel launched\n");
