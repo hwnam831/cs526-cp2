@@ -19,8 +19,8 @@
 #include <string.h>
 #include <iostream>
 #include <fstream>
-#include "mv.h"
-#include "mv_kernel.cu"
+#include "tr.h"
+#include "tr_kernel.cu"
 
 // This will output the proper CUDA error strings in the event that a CUDA host call returns an error
 #define checkCudaErrors(err)  __checkCudaErrors (err, __FILE__, __LINE__)
@@ -171,19 +171,14 @@ char *generatePTX(const char *ll, size_t size, const char *filename)
 }
 
 void
-computeGold(float* C, const float* A, const float* B, unsigned int hA, unsigned int wA, unsigned int wB)
+computeGold(float* C, const float* A, unsigned int hA, unsigned int wA, unsigned int wB)
 {
-    for (unsigned int i = 0; i < hA; ++i) {
-        double sum = 0;
-        for (unsigned int j = 0; j < wA; ++j) {
-            double a = A[i * wA + j];
-            double b = B[j];
-            sum += a * b;
+    for (unsigned int j = 0; j < wA; ++j) {
+        for (unsigned int i = 0; i < hA; ++i) {
+            C[j*hA+i]=A[i*wA+j];
         }
-        C[i] = (float)sum;
     }
 }
-
 
 // Allocates a matrix with random float entries.
 void randomInit(float* data, int size)
@@ -291,16 +286,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
-    unsigned int size_B = WB * HB;
-    unsigned int mem_size_B = sizeof(float) * size_B;
-    if ((h_B = (float*) malloc(mem_size_B)) == NULL) {
-        fprintf(stderr, "Could not allocate host memory\n");
-        exit(-1);
-    }
 
     // initialize host memory
     randomInit(h_A, size_A);
-    randomInit(h_B, size_B);
 
     // allocate device memory for result
     unsigned int size_C = WC * HC;
@@ -311,21 +299,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
- 
+
     checkCudaErrors(cuMemAlloc(&d_A, mem_size_A));
-    checkCudaErrors(cuMemAlloc(&d_B, mem_size_B));
     checkCudaErrors(cuMemAlloc(&d_C, mem_size_C));
 
     // copy host memory to device
     checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size_A));
-    checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
 
     // setup execution parameters
-    dim3 threads(256, 1);
+    dim3 threads(16, 16);
     dim3 grid(WC / threads.x, HC / threads.y);
 
     int Width_A = WA;
-    void *params[] = { &d_A, &d_B, &d_C, &Width_A };
+    void *params[] = { &d_A, &d_C, &Width_A };
     // Launch the kernel
     checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
                                    0, NULL, params, NULL)); 
@@ -341,9 +327,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "Could not allocate reference memory\n");
         exit(-1);
     }
-    computeGold(reference, h_A, h_B, HA, WA, WB);
+    computeGold(reference, h_A, HA, WA, WB);
 
-    bool res = cutCompareL2fe(reference, h_C, size_C, 1e-5f);
+    bool res = cutCompareL2fe(reference, h_C, size_C, 1e-6f);
     printf("Test %s \n", res ? "PASSED" : "FAILED");
 
     if (!res) {

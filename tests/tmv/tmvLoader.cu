@@ -19,8 +19,7 @@
 #include <string.h>
 #include <iostream>
 #include <fstream>
-#include "mv.h"
-#include "mv_kernel.cu"
+#include "tmv.h"
 
 // This will output the proper CUDA error strings in the event that a CUDA host call returns an error
 #define checkCudaErrors(err)  __checkCudaErrors (err, __FILE__, __LINE__)
@@ -173,17 +172,16 @@ char *generatePTX(const char *ll, size_t size, const char *filename)
 void
 computeGold(float* C, const float* A, const float* B, unsigned int hA, unsigned int wA, unsigned int wB)
 {
-    for (unsigned int i = 0; i < hA; ++i) {
+    for (unsigned int j = 0; j < wA; ++j) {
         double sum = 0;
-        for (unsigned int j = 0; j < wA; ++j) {
+        for (unsigned int i = 0; i < hA; ++i) {
             double a = A[i * wA + j];
-            double b = B[j];
+            double b = B[i];
             sum += a * b;
         }
-        C[i] = (float)sum;
+        C[j] = (float)sum;
     }
 }
-
 
 // Allocates a matrix with random float entries.
 void randomInit(float* data, int size)
@@ -311,7 +309,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
- 
+
     checkCudaErrors(cuMemAlloc(&d_A, mem_size_A));
     checkCudaErrors(cuMemAlloc(&d_B, mem_size_B));
     checkCudaErrors(cuMemAlloc(&d_C, mem_size_C));
@@ -326,11 +324,16 @@ int main(int argc, char **argv)
 
     int Width_A = WA;
     void *params[] = { &d_A, &d_B, &d_C, &Width_A };
+    
     // Launch the kernel
-    checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
-                                   0, NULL, params, NULL)); 
+    for (int i=0; i<16; i++) {
+        //cudaThreadSynchronize();
+        // execute the kernel
+        checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1, 0, NULL, params, NULL)); 
+        // stop and destroy timer
+        //cudaThreadSynchronize();
+    }
 
-    cudaDeviceSynchronize();
     fprintf(stderr, "CUDA kernel launched\n");
     // Copy the result back to the host
     checkCudaErrors(cuMemcpyDtoH(h_C, d_C, mem_size_C));
@@ -343,7 +346,7 @@ int main(int argc, char **argv)
     }
     computeGold(reference, h_A, h_B, HA, WA, WB);
 
-    bool res = cutCompareL2fe(reference, h_C, size_C, 1e-5f);
+    bool res = cutCompareL2fe(reference, h_C, size_C, 1e-6f);
     printf("Test %s \n", res ? "PASSED" : "FAILED");
 
     if (!res) {

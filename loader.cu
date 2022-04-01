@@ -16,11 +16,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
-#include <string.h>
-#include <iostream>
-#include <fstream>
-#include "mv.h"
-#include "mv_kernel.cu"
 
 // This will output the proper CUDA error strings in the event that a CUDA host call returns an error
 #define checkCudaErrors(err)  __checkCudaErrors (err, __FILE__, __LINE__)
@@ -31,11 +26,6 @@ void __checkCudaErrors( CUresult err, const char *file, const int line )
     if( CUDA_SUCCESS != err) {
         fprintf(stderr, "checkCudaErrors() Driver API error = %04d \from file <%s>, line %i.\n",
                 err, file, line );
-        //cudaError_t error = cudaGetLastError();
-        //fprintf(stderr, "%s\n", cudaGetErrorString(error));
-        const char *p;
-        cuGetErrorString(err, &p);
-        fprintf(stderr, "%s\n", p);
         exit(-1);
     }
 }
@@ -170,69 +160,6 @@ char *generatePTX(const char *ll, size_t size, const char *filename)
     return PTX;
 }
 
-void
-computeGold(float* C, const float* A, const float* B, unsigned int hA, unsigned int wA, unsigned int wB)
-{
-    for (unsigned int i = 0; i < hA; ++i) {
-        double sum = 0;
-        for (unsigned int j = 0; j < wA; ++j) {
-            double a = A[i * wA + j];
-            double b = B[j];
-            sum += a * b;
-        }
-        C[i] = (float)sum;
-    }
-}
-
-
-// Allocates a matrix with random float entries.
-void randomInit(float* data, int size)
-{
-    for (int i = 0; i < size; ++i)
-        data[i] = rand() / (float)RAND_MAX;
-}
-
-// Compare two float arrays using L2-norm with an epsilon tolerance for equality
-// same as cutCompareL2fe in cutil.cpp
-bool cutCompareL2fe( const float* reference, const float* data,
-                const unsigned int len, const float epsilon ) 
-{
-    float error = 0;
-    float ref = 0;
-
-    for( unsigned int i = 0; i < len; ++i) {
-        float diff = reference[i] - data[i];
-        error += diff * diff;
-        ref += reference[i] * reference[i];
-    }
-
-    float normRef = sqrtf(ref);
-    if (fabs(ref) < 1e-7) {
-        fprintf(stderr, "ERROR, reference l2-norm is 0\n");
-        return false;
-    }
-    float normError = sqrtf(error);
-    error = normError / normRef;
-
-    return error < epsilon; // l2-norm error is greater than epsilon?
-}
-
-void printDiff(float *data1, float *data2, int width, int height)
-{
-  int i,j,k;
-  int error_count=0;
-  for (j=0; j<height; j++) {
-    for (i=0; i<width; i++) {
-      k = j*width+i;
-      if (data1[k] != data2[k]) {
-         printf("diff(%d,%d) CPU=%4.4f, GPU=%4.4f n", i,j, data1[k], data2[k]);
-         error_count++;
-      }
-    }
-  }
-  printf(" nTotal Errors = %d n", error_count);
-}
-
 int main(int argc, char **argv)
 {
     const unsigned int nThreads = 32;
@@ -243,23 +170,22 @@ int main(int argc, char **argv)
     CUdevice     hDevice  = 0;
     CUmodule     hModule  = 0;
     CUfunction   hKernel  = 0;
-    CUdeviceptr  d_A   = 0;
-    CUdeviceptr  d_B   = 0;
-    CUdeviceptr  d_C   = 0;
-    float         *h_A   = 0;
-    float         *h_B   = 0;
-    float         *h_C   = 0;
+    CUdeviceptr  d_data   = 0;
+    CUdeviceptr  d_output   = 0;
+    float         *h_data   = 0;
+    float         *h_output   = 0;
     char        *ptx      = NULL;
     unsigned int i;
 
     // Get the ll from file
     size_t size = 0;
     // Kernel parameters
+    void *params[] = { &d_data, &d_output };
     if (argc < 3){
         fprintf(stdout, "Usage: ./loader [PTXFILE] [KERNELNAME]");
         return -1;
     }
-    
+
     const char *filename = argv[1];
 
     char *ll = loadProgramSource(filename, &size);
@@ -269,94 +195,52 @@ int main(int argc, char **argv)
     ptx = loadProgramSource(filename, &size);
     fprintf(stdout, "PTX generated:\n");
     fprintf(stdout, "%s\n", ptx);
-/*
-    std::ifstream t(filename);
-    if(!t.is_open()) {
-        fprintf(stderr, "file not found\n");
-        exit(-1);
-    }
-    std::string str((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
-    fprintf(stdout, "%s\n", str.c_str());
-*/
+    
     // Initialize the device and get a handle to the kernel
     checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, ptx, argv[2]));
-    
-    // set seed for rand()
-    srand(2006);
 
-    // allocate host memory for matrices A and B
-    unsigned int size_A = WA * HA;
-    unsigned int mem_size_A = sizeof(float) * size_A;
-    if ((h_A = (float*) malloc(mem_size_A)) == NULL) {
+    // Allocate memory on host and device
+    if ((h_data = (float *)malloc(memSize)) == NULL) {
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
-    unsigned int size_B = WB * HB;
-    unsigned int mem_size_B = sizeof(float) * size_B;
-    if ((h_B = (float*) malloc(mem_size_B)) == NULL) {
+    if ((h_output = (float *)malloc(memSize)) == NULL) {
         fprintf(stderr, "Could not allocate host memory\n");
         exit(-1);
     }
-
-    // initialize host memory
-    randomInit(h_A, size_A);
-    randomInit(h_B, size_B);
-
-    // allocate device memory for result
-    unsigned int size_C = WC * HC;
-    unsigned int mem_size_C = sizeof(float) * size_C;
-
-    // allocate host memory for the result
-    if ((h_C = (float*) malloc(mem_size_C)) == NULL) {
-        fprintf(stderr, "Could not allocate host memory\n");
-        exit(-1);
+    checkCudaErrors(cuMemAlloc(&d_data, memSize));
+    checkCudaErrors(cuMemAlloc(&d_output, memSize));
+    fprintf(stdout, "Input: {");
+    for (int i=0; i<nThreads*nBlocks; i++){
+        h_data[i] = i;
+        fprintf(stdout, "%d ",i);
     }
- 
-    checkCudaErrors(cuMemAlloc(&d_A, mem_size_A));
-    checkCudaErrors(cuMemAlloc(&d_B, mem_size_B));
-    checkCudaErrors(cuMemAlloc(&d_C, mem_size_C));
-
-    // copy host memory to device
-    checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size_A));
-    checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
-
-    // setup execution parameters
-    dim3 threads(256, 1);
-    dim3 grid(WC / threads.x, HC / threads.y);
-
-    int Width_A = WA;
-    void *params[] = { &d_A, &d_B, &d_C, &Width_A };
+    fprintf(stdout, "}\n");
+    checkCudaErrors(cuMemcpyHtoD(d_data, h_data, memSize));
     // Launch the kernel
-    checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, 1, threads.x, threads.y, 1,
-                                   0, NULL, params, NULL)); 
-
+    checkCudaErrors(cuLaunchKernel(hKernel, nBlocks, 1, 1, nThreads, 1, 1,
+                                   0, NULL, params, NULL));
+    fprintf(stdout, "CUDA kernel launched\n");
     cudaDeviceSynchronize();
-    fprintf(stderr, "CUDA kernel launched\n");
     // Copy the result back to the host
-    checkCudaErrors(cuMemcpyDtoH(h_C, d_C, mem_size_C));
-
-    // compute reference solution
-    float* reference = (float*) malloc(mem_size_C);
-    if (reference == NULL) {
-        fprintf(stderr, "Could not allocate reference memory\n");
-        exit(-1);
+    checkCudaErrors(cuMemcpyDtoH(h_output, d_output, memSize));
+    fprintf(stdout, "Output: {");
+    // Print the result
+    for (i = 0 ; i < nBlocks * nThreads ; i++) {
+        fprintf(stdout, "%f ", h_output[i]);
     }
-    computeGold(reference, h_A, h_B, HA, WA, WB);
 
-    bool res = cutCompareL2fe(reference, h_C, size_C, 1e-5f);
-    printf("Test %s \n", res ? "PASSED" : "FAILED");
-
-    if (!res) {
-        printDiff(reference, h_C,  WC, HC);
-    }
+    fprintf(stdout, "}\n");
     
     // Cleanup
-    checkCudaErrors(cuMemFree(d_A));
-    checkCudaErrors(cuMemFree(d_B));
-    free(h_A);
-    free(h_B);
-    free(h_C);
-    free(reference);
+    if (d_data) {
+        checkCudaErrors(cuMemFree(d_data));
+        d_data = 0;
+    }
+    if (h_data) {
+        free(h_data);
+        h_data = 0;
+    }
     if (hModule) {
         checkCudaErrors(cuModuleUnload(hModule));
         hModule = 0;
@@ -366,9 +250,8 @@ int main(int argc, char **argv)
         hContext = 0;
     }
 
-    //free(ll);
-    //free(ptx);
+    free(ll);
+    free(ptx);
     
     return 0;
 }
-

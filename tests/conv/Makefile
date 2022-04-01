@@ -1,3 +1,3 @@
-TARGET=tr
+TARGET=conv
 include ../Makefile
 

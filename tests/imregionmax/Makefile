@@ -1,3 +1,3 @@
-TARGET=tr
+TARGET=imregionmax
 include ../Makefile
 

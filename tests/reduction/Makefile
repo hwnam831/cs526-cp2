@@ -1,3 +1,3 @@
-TARGET=tr
+TARGET=reduction
 include ../Makefile
 

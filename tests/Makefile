@@ -1,10 +1,10 @@
-LEVEL = ../..
+LEVEL = ..
 
 ## change or use make TARGET=inputfilename
-TARGET=square
+#TARGET=square
 
 ## replace LLVMROOT as appropriate
-LLVMROOT ?= ~/llvm
+LLVMROOT ?= /home/yaoy4/llvm
 CUDAROOT = /usr/local/cuda
 
 LLVMGCC = $(LLVMROOT)/bin/clang++
@@ -13,8 +13,22 @@ LLC = $(LLVMROOT)/bin/llc
 LLVMAS  = $(LLVMROOT)/bin/llvm-as
 LLVMDIS = $(LLVMROOT)/bin/llvm-dis
 LLVMOPT = $(LLVMROOT)/bin/opt
+SUBDIRS := vv transpose conv conv_16_16 demosaic imregionmax matmul mv reduction strsm tmv
 
+define RUNFOREACH
+    for DIR in $(SUBDIRS); do \
+        echo $$DIR; \
+		$(MAKE) -C $$DIR; \
+    done
+endef
+define CLEANFOREACH
+    for DIR in $(SUBDIRS); do \
+        echo $$DIR; \
+		$(MAKE) -C $$DIR clean; \
+    done
+endef
 
+.PRECIOUS: %.nvvm.ll
 
 ## Other choices: test or comparecfe (these will be provided later)
 default: test
@@ -25,23 +39,27 @@ CLCFLAGS = -emit-llvm -c -target -nvptx64-nvidial-nvcl -Dcl_clang_storage_class_
  -Xclang -mlink-bitcode-file -Xclang $(LLVMROOT)/lib/clc/nvptx64--nvidiacl.bc -Dcl_khr_fp64  \
  -Xclang -fdeclare-opencl-builtins -cl-std=CL2.0
 
-test: loader $(TARGET).ptx.s
-	./loader $(TARGET).ptx.s $(TARGET)
+test: $(TARGET)Loader $(TARGET).ptx.s
+	./$(TARGET)Loader $(TARGET).ptx.s $(TARGET)
 
-.PRECIOUS: %.ll
+all: 
+	$(call RUNFOREACH)
 
+cleanAll:
+	$(call CLEANFOREACH)
+	
 
 %.nvvm.ll: %.nvvm.bc
 	$(LLVMDIS) $<
 
-loader: loader.cu
+$(TARGET)Loader: $(TARGET)Loader.cu
 	$(LLVMGCC) $< -o $@ $(NVCCFLAGS) $(NVCCLIBS)
 
-%.nvvm.bc: %.cl
+%.nvvm.bc: %_kernel.cl
 	$(LLVMGCC) $< -o $@ $(CLCFLAGS)
 
 %.ptx.s: %.nvvm.ll
 	$(LLC) -mcpu=sm_61 -march=nvptx64 $< -o $@
 
 clean:
-	$(RM) -f loader *.bc *.ll *.ptx.s
+	$(RM) -f $(TARGET)Loader *.bc *.ll *.ptx.s

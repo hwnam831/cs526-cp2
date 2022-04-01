@@ -1,3 +1,3 @@
-TARGET=tr
+TARGET=tmv
 include ../Makefile
 

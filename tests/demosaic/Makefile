@@ -1,3 +1,3 @@
-TARGET=tr
+TARGET=demosaic
 include ../Makefile
 
