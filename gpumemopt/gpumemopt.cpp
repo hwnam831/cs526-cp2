@@ -27,7 +27,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Pass.h"
-#include "llvm/Transforms/Utils/PromoteMemToReg.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/ADT/Statistic.h"
 using namespace llvm;
@@ -36,9 +36,9 @@ STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
 STATISTIC(NumPromoted,  "Number of scalar allocas promoted to register");
 
 namespace {
-  struct SROA : public FunctionPass {
+  struct GPUMemCoalescing : public FunctionPass {
     static char ID; // Pass identification
-    SROA() : FunctionPass(ID) { }
+    GPUMemCoalescing() : FunctionPass(ID) { }
 
     // Entry point for the overall scalar-replacement pass
     bool runOnFunction(Function &F);
@@ -54,16 +54,11 @@ namespace {
   };
 }
 
-char SROA::ID = 0;
-static RegisterPass<SROA> X("scalarrepl-netid",
-			    "Scalar Replacement of Aggregates (by <netid>)",
+char GPUMemCoalescing::ID = 0;
+static RegisterPass<GPUMemCoalescing> X("gpumemcoal",
+			    "GPU Memory coalescing pass",
 			    false /* does not modify the CFG */,
 			    false /* transformation, not just analysis */);
-
-
-// Public interface to create the ScalarReplAggregates pass.
-// This function is provided to you.
-FunctionPass *createMyScalarReplAggregatesPass() { return new SROA(); }
 
 
 //===----------------------------------------------------------------------===//
@@ -73,8 +68,19 @@ FunctionPass *createMyScalarReplAggregatesPass() { return new SROA(); }
 // Function runOnFunction:
 // Entry point for the overall ScalarReplAggregates function pass.
 // This function is provided to you.
-bool SROA::runOnFunction(Function &F) {
-
+bool GPUMemCoalescing::runOnFunction(Function &F) {
+  for (BasicBlock& block : F){
+    for (Instruction& inst : block){
+      if (CallInst *CI = dyn_cast<CallInst>(&inst)){
+        //CI->dump();
+        auto funcname = CI->getCalledFunction()->getName();
+        errs() << funcname << "\n";
+        if(funcname == "llvm.nvvm.read.ptx.sreg.tid.x"){
+          errs() << "Found tid.x\n";
+        }
+      } 
+    }
+  }
   bool Changed = false;
   return Changed;
 

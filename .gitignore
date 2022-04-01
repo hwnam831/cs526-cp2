@@ -33,3 +33,8 @@
 
 .vscode
 llvm
+build
+
+*Loader
+*.ptx.s
+*.ll
