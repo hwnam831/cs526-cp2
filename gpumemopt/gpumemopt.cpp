@@ -20,6 +20,7 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "scalarrepl"
+#define CAST(T,N,U) T *N = dyn_cast<T>(U)
 #include <iostream>
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -30,6 +31,8 @@
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/ValueMap.h"
 using namespace llvm;
 
 STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
@@ -47,6 +50,7 @@ namespace {
     // will not alter the CFG, so say so.
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesCFG();
+      AU.addRequired<LoopInfoWrapperPass>();
     }
 
   private:
@@ -60,6 +64,65 @@ static RegisterPass<GPUMemCoalescing> X("gpumemcoal",
 			    false /* does not modify the CFG */,
 			    false /* transformation, not just analysis */);
 
+bool AnalyzeIncrement(Value* base, ValueMap<Value*, int>& map, int incr){
+  bool isChanged = false;
+  base->dump();
+  errs() << "Analyzed increment : " << incr << "\n\n";
+  for (auto U: base->users()){
+    if (map.count(U)){
+      continue;
+    }
+    if (CAST(BinaryOperator,BO,U)) {
+      switch (BO->getOpcode()){
+        case Instruction::BinaryOps::Add : {
+          map.insert(std::make_pair(U, incr));
+          isChanged = true;
+          AnalyzeIncrement(U, map, incr);
+          break;}
+        case Instruction::BinaryOps::Sub : {
+          //TODO: What if it is a subtraction base?
+          if (BO->getOperand(0) == base) {
+            map.insert(std::make_pair(U, incr));
+            isChanged = true;
+            AnalyzeIncrement(U, map, incr);
+          } else {
+            map.insert(std::make_pair(U, -incr));
+            isChanged = true;
+            AnalyzeIncrement(U, map, -incr);
+          }
+          break;}
+        case Instruction::BinaryOps::Mul: {
+          Value *op1 = BO->getOperand(0);
+          Value *op2 = BO->getOperand(1);
+          int multiplier;
+          if(isa<ConstantInt>(op1)){
+            multiplier = dyn_cast<ConstantInt>(op1)->getLimitedValue();
+            map.insert(std::make_pair(U, incr*multiplier));
+            isChanged = true;
+            AnalyzeIncrement(U, map, incr*multiplier);
+          } else if(isa<ConstantInt>(op2)){
+            multiplier = dyn_cast<ConstantInt>(op2)->getSExtValue();
+            map.insert(std::make_pair(U, incr*multiplier));
+            isChanged = true;
+            AnalyzeIncrement(U, map, incr*multiplier);
+          }
+          break;}
+        default: {
+          break;}
+      }
+    } else if(isa<SExtInst>(U)){
+      map.insert(std::make_pair(U, incr));
+      isChanged = true;
+      AnalyzeIncrement(U, map, incr);
+    } else if(isa<ZExtInst>(U)){
+      map.insert(std::make_pair(U, incr));
+      isChanged = true;
+      AnalyzeIncrement(U, map, incr);
+    }
+    
+  }
+  return isChanged;
+}
 
 //===----------------------------------------------------------------------===//
 //                      SKELETON FUNCTION TO BE IMPLEMENTED
@@ -69,14 +132,31 @@ static RegisterPass<GPUMemCoalescing> X("gpumemcoal",
 // Entry point for the overall ScalarReplAggregates function pass.
 // This function is provided to you.
 bool GPUMemCoalescing::runOnFunction(Function &F) {
+  ValueMap<Value*, int> IVincr;
+  ValueMap<Value*, int> TIDincr;
   for (BasicBlock& block : F){
+    LoopInfo& loops = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    //loops.print(errs());
+    for (auto& loop : loops){
+      auto IV = loop->getCanonicalInductionVariable();
+      if (IVincr.count(IV) == 0){
+        IVincr.insert(std::make_pair(IV, 1));
+        errs() << "Found induction variable\n";
+        AnalyzeIncrement(IV, IVincr, 1);
+      }
+    }
     for (Instruction& inst : block){
       if (CallInst *CI = dyn_cast<CallInst>(&inst)){
         //CI->dump();
         auto funcname = CI->getCalledFunction()->getName();
-        errs() << funcname << "\n";
+        //errs() << funcname << "\n";
         if(funcname == "llvm.nvvm.read.ptx.sreg.tid.x"){
-          errs() << "Found tid.x\n";
+          
+          if (TIDincr.count(CI) == 0){
+            TIDincr.insert(std::make_pair(CI, 1));
+            errs() << "Found tid.x\n";
+            AnalyzeIncrement(CI, TIDincr, 1);
+          }
         }
       } 
     }
