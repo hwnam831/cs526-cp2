@@ -66,8 +66,8 @@ static RegisterPass<GPUMemCoalescing> X("gpumemcoal",
 
 bool AnalyzeIncrement(Value* base, ValueMap<Value*, int>& map, int incr){
   bool isChanged = false;
-  base->dump();
-  errs() << "Analyzed increment : " << incr << "\n\n";
+  //base->dump();
+  //errs() << "Analyzed increment : " << incr << "\n\n";
   for (auto U: base->users()){
     if (map.count(U)){
       continue;
@@ -96,7 +96,7 @@ bool AnalyzeIncrement(Value* base, ValueMap<Value*, int>& map, int incr){
           Value *op2 = BO->getOperand(1);
           int multiplier;
           if(isa<ConstantInt>(op1)){
-            multiplier = dyn_cast<ConstantInt>(op1)->getLimitedValue();
+            multiplier = dyn_cast<ConstantInt>(op1)->getSExtValue();
             map.insert(std::make_pair(U, incr*multiplier));
             isChanged = true;
             AnalyzeIncrement(U, map, incr*multiplier);
@@ -124,6 +124,64 @@ bool AnalyzeIncrement(Value* base, ValueMap<Value*, int>& map, int incr){
   return isChanged;
 }
 
+//This may introduce a lot of dead code. May need ADCE after this
+Value* FindBaseAddress(Value* ADDR, ValueMap<Value*, int>& IVincr, ValueMap<Value*, int>& TIDincr){
+  if(CAST(ConstantInt, CINT, ADDR)){
+    errs() << CINT->getSExtValue();
+    return NULL;
+  } else if(IVincr.count(ADDR) == 0 && TIDincr.count(ADDR) == 0){
+    errs() << ADDR->getName();
+    return NULL;
+  } else if (IVincr.count(ADDR) && IVincr[ADDR] == 0){
+    errs() << "0";
+    return NULL;
+  } else if (TIDincr.count(ADDR) && TIDincr[ADDR] == 0){
+    errs() << "0";
+    return NULL;
+  }
+  if (CAST(BinaryOperator,BO,ADDR)) {
+    switch (BO->getOpcode()){
+      case Instruction::BinaryOps::Add : {
+        errs() << "(Add ";
+        FindBaseAddress(BO->getOperand(0), IVincr, TIDincr);
+        errs() << ", ";
+        FindBaseAddress(BO->getOperand(1), IVincr, TIDincr);
+        errs() << ")";
+        break;}
+      case Instruction::BinaryOps::Sub : {
+        errs() << "(Sub ";
+        FindBaseAddress(BO->getOperand(0), IVincr, TIDincr);
+        errs() << ", ";
+        FindBaseAddress(BO->getOperand(1), IVincr, TIDincr);
+        errs() << ")";
+        break;}
+      case Instruction::BinaryOps::Mul: {
+        errs() << "(Mul ";
+        FindBaseAddress(BO->getOperand(0), IVincr, TIDincr);
+        errs() << ", ";
+        FindBaseAddress(BO->getOperand(1), IVincr, TIDincr);
+        errs() << ")";
+        break;}
+      default: {
+        errs() << "BO exception? ";
+        ADDR->dump();
+        break;}
+    }
+  } else if(isa<SExtInst>(ADDR)){
+    errs() << "(SEXT ";
+    FindBaseAddress(dyn_cast<SExtInst>(ADDR)->getOperand(0), IVincr, TIDincr);
+    errs() << ")";
+  } else if(isa<ZExtInst>(ADDR)){
+    errs() << "(ZEXT ";
+    FindBaseAddress(dyn_cast<ZExtInst>(ADDR)->getOperand(0), IVincr, TIDincr);
+    errs() << ")";
+  } else {
+    errs() << "What is this? ";
+    ADDR->dump();
+  }
+  return NULL;
+}
+
 //===----------------------------------------------------------------------===//
 //                      SKELETON FUNCTION TO BE IMPLEMENTED
 //===----------------------------------------------------------------------===//
@@ -140,24 +198,56 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
     for (auto& loop : loops){
       auto IV = loop->getCanonicalInductionVariable();
       if (IVincr.count(IV) == 0){
-        IVincr.insert(std::make_pair(IV, 1));
+        //Zero marks that this is the exact IV
+        IVincr.insert(std::make_pair(IV, 0));
         errs() << "Found induction variable\n";
         AnalyzeIncrement(IV, IVincr, 1);
       }
     }
     for (Instruction& inst : block){
-      if (CallInst *CI = dyn_cast<CallInst>(&inst)){
+      if (CAST(CallInst, CI, &inst)){
         //CI->dump();
         auto funcname = CI->getCalledFunction()->getName();
         //errs() << funcname << "\n";
         if(funcname == "llvm.nvvm.read.ptx.sreg.tid.x"){
           
           if (TIDincr.count(CI) == 0){
-            TIDincr.insert(std::make_pair(CI, 1));
+            // Zero marks that this is the exact TID.x
+            TIDincr.insert(std::make_pair(CI, 0));
             errs() << "Found tid.x\n";
             AnalyzeIncrement(CI, TIDincr, 1);
           }
         }
+      } else if (CAST(GetElementPtrInst, GEPI, &inst)){
+        if(GEPI->getAddressSpace() == 1 &&
+           GEPI->getNumIndices() == 1){
+          auto IDX = GEPI->idx_begin()->get();
+          
+          int ivinc = IVincr.count(IDX) ? IVincr[IDX] : 0;
+          int tidinc = TIDincr.count(IDX) ? TIDincr[IDX] : 0;
+          
+          if(ivinc % 64 == 0 && tidinc == 1){
+            GEPI->dump();
+            errs() << "This GEPI is coalesced\n";
+            errs() << "IV increment coefficient: " << ivinc << '\n';
+            errs() << "Thread ID.x increment coefficient: " << tidinc << '\n';
+            FindBaseAddress(IDX, IVincr, TIDincr);
+          } else {
+            GEPI->dump();
+            errs() << "This GEPI is not coalesced\n";
+            errs() << "IV increment coefficient: " << ivinc << '\n';
+            errs() << "Thread ID.x increment coefficient: " << tidinc << '\n';
+            FindBaseAddress(IDX, IVincr, TIDincr);
+          }
+        }
+        /**
+        GEPI->dump();
+        errs() << "addrspace " << GEPI->getAddressSpace() << "\n";
+        errs() << "ptr addrspace " << GEPI->getPointerAddressSpace() << "\n";
+        errs() << "numindices " << GEPI->getNumIndices() << "\n";
+        GEPI->idx_begin()->get()->dump();
+        errs() << '\n';
+        */
       } 
     }
   }
