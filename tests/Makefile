@@ -69,7 +69,7 @@ $(TARGET)Loader: $(TARGET)Loader.cu
 	$(LLVMOPT) $(DEBUGOPTS) -o=$@ < $<
 
 %.opt.bc: %.debug.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) --gpumemcoal -o=$@ < $<
+	$(LLVMOPT) -load $(OPTLIB) --gpumempref -o=$@ < $<
 
 %.ptx.s: %.nvvm.ll
 	$(LLC) -mcpu=sm_61 -march=nvptx64 $< -o $@
