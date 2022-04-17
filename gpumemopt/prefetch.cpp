@@ -198,10 +198,10 @@ outs() << "-------------------------------------\n";
               errs() << "LPtrOp not GEPI\n";
             }
           }
-          //const SCEV *NextLSCEV = SE->getAddExpr(LSCEVAddRec, expr->getStepRecurrence(*SE));
-          //Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
-          //SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
-          //Value *PrefPtrValue = SCEVE.expandCodeFor(NextLSCEV, I8Ptr, MemI);
+          // const SCEV *NextLSCEV = SE->getAddExpr(LSCEVAddRec, expr->getStepRecurrence(*SE));
+          // Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
+          // SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
+          // Value *PrefPtrValue = SCEVE.expandCodeFor(NextLSCEV, LPtrOp->getType(), MemI);
         } else {
           outs() << ("finding nullptr\n");
         }
