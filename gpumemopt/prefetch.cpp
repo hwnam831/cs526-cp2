@@ -107,6 +107,8 @@ const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * exp
 }
 
 const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
+  outs() << "createInitialPrefAddr-------------------------------------\n";
+
   expr->dump();
   
   if(!isa<SCEVAddRecExpr>(expr)){
@@ -137,6 +139,7 @@ const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
       case scMulExpr: {
         const SCEVMulExpr * SCEVMul_expr = dyn_cast<SCEVMulExpr>(expr);
         SmallVector<const SCEV *, 5> operands;
+
         for (unsigned i = 0; i < SCEVMul_expr->getNumOperands(); ++i){
           if(SE->containsAddRecurrence(SCEVMul_expr->getOperand(i))){
             operands.push_back(createInitialPrefAddr(SCEVMul_expr->getOperand(i)));
@@ -164,6 +167,9 @@ const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
       case scAddExpr: {
         const SCEVAddExpr * SCEVAdd_expr = dyn_cast<SCEVAddExpr>(expr);
         SmallVector<const SCEV *, 5> operands;
+        // outs() << "aaaaaa--------------------\n";
+        //     SCEVAdd_expr->getOperand(0)->dump();
+        // outs() << "aaaaaa--------------------\n";
         for (unsigned i = 0; i < SCEVAdd_expr->getNumOperands(); ++i){
           if(SE->containsAddRecurrence(SCEVAdd_expr->getOperand(i))){
             operands.push_back(createInitialPrefAddr(SCEVAdd_expr->getOperand(i)));
@@ -234,9 +240,34 @@ outs() << "start-------------------------------------\n";
 
   bool Changed = false;
   //findInductionVariables(L); // not used for now...
-L->dump();
-outs() << "-------------------------------------\n";
-
+  L->dump();
+  //TODO: find immediate dominator of this basic block
+  BasicBlock *Incoming = nullptr, *Backedge = nullptr;
+  if (!L->getIncomingAndBackEdge(Incoming, Backedge))
+    outs() << "here!\n";
+  Incoming->dump();
+  //L->dumpVerbose();
+  outs() << "-------------------------------------\n";
+  for (const auto BB : L->blocks()) {
+    for (auto &I : *BB) {
+      if (CallInst *CI = dyn_cast<CallInst>(&I)){
+        //CI->dump();
+        auto funcname = CI->getCalledFunction()->getName();
+        if(L->hasLoopInvariantOperands(CI)){
+          // CI->moveBefore(Incoming->getTerminator());
+          if(funcname == "llvm.nvvm.read.ptx.sreg.tid.x" ||
+          funcname == "llvm.nvvm.read.ptx.sreg.tid.y" ||
+          funcname == "llvm.nvvm.read.ptx.sreg.ctaid.x" || 
+          funcname == "llvm.nvvm.read.ptx.sreg.ctaid.y"){
+            IRBuilder<> Builder(Incoming->getTerminator());
+            Value* newCI = Builder.CreateCall(CI->getFunctionType(), CI->getCalledOperand());
+            CI->replaceAllUsesWith(newCI);
+            //CI->removeFromParent();
+          }
+        }
+      }
+    }
+  }
   for (const auto BB : L->blocks()) {
     for (auto &I : *BB) {
       Value *PtrOp;
@@ -277,41 +308,52 @@ outs() << "-------------------------------------\n";
       outs() << "adding prefetch\n";
 
       if(GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)){
-      const SCEV *LSCEV = SE->getSCEV(gepi->getOperand(1));
-      LSCEV->dump();
-      const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
-      if(LSCEVAddRec != nullptr){
-        outs() << "finding addrecs\n";
-        const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
-        if(expr != nullptr){
-          expr->dump();
-          //TODO: does not have to be constant?
-          if (const SCEVConstant *C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
-            ConstantInt *CI = ConstantInt::get(SE->getContext(), C->getAPInt());
-              IRBuilder<> Builder(gepi);
-              gepi->getOperand(1)->dump();
-              Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI);
-              gepi->setOperand(1, prefAddr);
-          }
-          const SCEV *t = SE->getPointerBase(LSCEVAddRec);
-          t->dump();
+        const SCEV *LSCEV = SE->getSCEV(gepi->getOperand(1));//, L);AtScope
+        LSCEV->dump();
+        const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
+        if(LSCEVAddRec != nullptr){
+          outs() << "finding addresses\n";
+          const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
+          if(expr != nullptr){
+            expr->dump();
+            //TODO: does not have to be constant?
+            if (const SCEVConstant *C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
+              ConstantInt *CI = ConstantInt::get(SE->getContext(), C->getAPInt());
+                IRBuilder<> Builder(gepi);
+                gepi->getOperand(1)->dump();
+                Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI);
+                gepi->setOperand(1, prefAddr);
+            }
+            // const SCEV *t = SE->getPointerBase(LSCEVAddRec);
+            // t->dump();
 
-          // const SCEV *NextLSCEV = SE->getAddExpr(LSCEV, SE->getNegativeSCEV(t));
-          // NextLSCEV->dump();
-          const SCEV *initLSCEV = createInitialPrefAddr(LSCEV);
-          outs() << "initLSCEV: ";
-          initLSCEV->dump();
-          // unsigned num_iterations = SE->getSmallConstantTripCount(L);
-          // outs() << "loop counts: " << num_iterations << "\n";
-          // const SCEV *NextLSCEV = SE->getAddExpr(LSCEVAddRec, SE->getMulExpr(SE->getNegativeSCEV(expr->getStepRecurrence(*SE)), SE->getConstant(expr->getStart()->getType(), num_iterations)));
-          // SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
-          // Value *PrefPtrValue = SCEVE.expandCodeFor(NextLSCEV, LPtrOp->getType(), MemI);
+            // const SCEV *NextLSCEV = SE->getAddExpr(LSCEV, SE->getNegativeSCEV(t));
+            // NextLSCEV->dump();
+            const SCEV *initLSCEV = createInitialPrefAddr(LSCEV);
+            Incoming->dump();
+            outs() << "initLSCEV: ";
+            initLSCEV->dump();
+
+            SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
+            Value *PrefPtrValue = SCEVE.expandCodeFor(initLSCEV, gepi->getOperand(1)->getType(), Incoming->getTerminator());
+            PrefPtrValue->dump();
+            // Value *PrefPtrValue = SCEVE.expandCodeFor(initLSCEV, gepi->getOperand(1)->getType(), MemI);
+            IRBuilder<> Builder(Incoming->getTerminator());
+            outs() << "gepi num operands: " << gepi->getNumOperands() << "\n";
+            gepi->dump();
+            gepi->getOperand(0)->getType()->getPointerElementType()->dump();
+            gepi->getOperand(0)->dump();
+            PrefPtrValue->dump();
+            Value *temp = Builder.CreateGEP(gepi->getOperand(0)->getType()->getPointerElementType(), gepi->getOperand(0), PrefPtrValue);
+            Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), temp);
+
+            
+          } else {
+            outs() << ("finding nullptr\n");
+          }
         } else {
-          outs() << ("finding nullptr\n");
+          continue;
         }
-      } else {
-        continue;
-      }
       } else continue;
 
       // outs() << LSCEVAddRec;
@@ -364,6 +406,7 @@ outs() << "-------------------------------------\n";
 
   return Changed;
 }
+
 bool GPUMemPrefetching::runOnFunction(Function &F) {
   outs() << "Start Prefetching.\n";
 
