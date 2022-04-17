@@ -277,7 +277,8 @@ outs() << "start-------------------------------------\n";
       Instruction *MemI;
 
       // only prefetch for stores from global memory to shared memory
-      if (StoreInst *SMemI = dyn_cast<StoreInst>(&I)) {
+      StoreInst *SMemI;
+      if (SMemI = dyn_cast<StoreInst>(&I)) {
         MemI = SMemI;
         PtrOp = SMemI->getPointerOperand();
         ValOp = SMemI->getValueOperand();
@@ -345,8 +346,11 @@ outs() << "start-------------------------------------\n";
             gepi->getOperand(0)->dump();
             PrefPtrValue->dump();
             Value *temp = Builder.CreateGEP(gepi->getOperand(0)->getType()->getPointerElementType(), gepi->getOperand(0), PrefPtrValue);
-            Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), temp);
-
+            Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), temp);
+            
+            SMemI->setOperand(0, tempVal);
+            
+            LMemI->moveAfter(SMemI->getNextNode()); //TODO: check the next immediate barrier inst
             
           } else {
             outs() << ("finding nullptr\n");
