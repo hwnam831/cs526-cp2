@@ -133,7 +133,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
 outs() << "start-------------------------------------\n";
 
   bool Changed = false;
-  findInductionVariables(L); // useless step for now...
+  findInductionVariables(L); // not used for now...
 
 outs() << "-------------------------------------\n";
 
@@ -183,6 +183,8 @@ outs() << "-------------------------------------\n";
         const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
         if(expr != nullptr){
           expr->dump();
+          IRBuilder Builder(MemI);
+          Value *prefAddr = Builder.CreateAdd(LPtrOp, ConstantInt::get(expr->getStepRecurrence(*SE)->getType(), expr->getOperand(1), true));
           const SCEV *NextLSCEV = SE->getAddExpr(LSCEVAddRec, expr->getStepRecurrence(*SE));
           Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
           SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
