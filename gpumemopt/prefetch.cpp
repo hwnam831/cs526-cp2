@@ -49,6 +49,7 @@ namespace {
     bool runOnFunction(Function &F);
     bool runOnLoop(Loop *L);
     const SCEVAddRecExpr *findAddRecExpr(const SCEVNAryExpr * expr);
+    const SCEV *createInitialPrefAddr(const SCEV * expr);
     void findInductionVariables(Loop *L);
     // getAnalysisUsage - List passes required by this pass.  We also know it
     // will not alter the CFG, so say so.
@@ -80,12 +81,18 @@ static RegisterPass<GPUMemPrefetching> X("gpumempref",
 // Entry point for the overall GPUMemPrefetching function pass.
 // This function is provided to you.
 
+// TODO: containsAddRecurrence(...)
 const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * expr){
-  // expr->dump();
+  expr->dump();
   if(!isa<SCEVAddRecExpr>(expr)){
+    outs() << "sub-expr: \n";
     for (unsigned i = 0; i < expr->getNumOperands(); ++i){
-      if(!isa<SCEVNAryExpr>(expr->getOperand(i)))
+      
+      if(!SE->containsAddRecurrence(expr->getOperand(i))){
+        outs() << "done: ";
+        expr->getOperand(i)->dump();
         continue;
+      }
 
       const SCEVNAryExpr * SCEVNAry_expr = dyn_cast<SCEVNAryExpr>(expr->getOperand(i));
       const SCEVAddRecExpr * sub_expr = findAddRecExpr(SCEVNAry_expr);
@@ -96,6 +103,97 @@ const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * exp
   } else {
     const SCEVAddRecExpr *LSCEAddRec_expr = dyn_cast<SCEVAddRecExpr>(expr);
     return LSCEAddRec_expr;
+  }
+}
+
+const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
+  expr->dump();
+  
+  if(!isa<SCEVAddRecExpr>(expr)){
+    switch (expr->getSCEVType()) {
+      case scConstant:
+        return expr;
+      case scPtrToInt: 
+        if(SE->containsAddRecurrence(expr))
+          return SE->getPtrToIntExpr(createInitialPrefAddr(expr), expr->getType());
+        else
+          return SE->getPtrToIntExpr(expr, expr->getType());
+      case scTruncate:
+        if(SE->containsAddRecurrence(expr))
+          return SE->getTruncateExpr(createInitialPrefAddr(expr), expr->getType());
+        else
+          return SE->getTruncateExpr(expr, expr->getType());
+      case scZeroExtend:
+        if(SE->containsAddRecurrence(expr))
+          return SE->getZeroExtendExpr(createInitialPrefAddr(expr), expr->getType());
+        else
+          return SE->getZeroExtendExpr(expr, expr->getType());
+      case scSignExtend:
+        if(SE->containsAddRecurrence(expr))
+          return SE->getSignExtendExpr(createInitialPrefAddr(expr), expr->getType());
+        else
+          return SE->getSignExtendExpr(expr, expr->getType());
+      // case scAddRecExpr:
+      case scMulExpr: {
+        const SCEVMulExpr * SCEVMul_expr = dyn_cast<SCEVMulExpr>(expr);
+        SmallVector<const SCEV *, 5> operands;
+        for (unsigned i = 0; i < SCEVMul_expr->getNumOperands(); ++i){
+          if(SE->containsAddRecurrence(SCEVMul_expr->getOperand(i))){
+            operands.push_back(createInitialPrefAddr(SCEVMul_expr->getOperand(i)));
+          } else {
+            operands.push_back(SCEVMul_expr->getOperand(i));
+          }
+        }
+        return SE->getMulExpr(operands);
+      }
+      case scUMaxExpr:
+      case scSMaxExpr:
+      case scUMinExpr:
+      case scSMinExpr: {
+        const SCEVMinMaxExpr * SCEVMinMax_expr = dyn_cast<SCEVMinMaxExpr>(expr);
+        SmallVector<const SCEV *, 5> operands;
+        for (unsigned i = 0; i < SCEVMinMax_expr->getNumOperands(); ++i){
+          if(SE->containsAddRecurrence(SCEVMinMax_expr->getOperand(i))){
+            operands.push_back(createInitialPrefAddr(SCEVMinMax_expr->getOperand(i)));
+          } else {
+            operands.push_back(SCEVMinMax_expr->getOperand(i));
+          }
+        }
+        return SE->getMinMaxExpr(expr->getSCEVType(), operands);
+      }
+      case scAddExpr: {
+        const SCEVAddExpr * SCEVAdd_expr = dyn_cast<SCEVAddExpr>(expr);
+        SmallVector<const SCEV *, 5> operands;
+        for (unsigned i = 0; i < SCEVAdd_expr->getNumOperands(); ++i){
+          if(SE->containsAddRecurrence(SCEVAdd_expr->getOperand(i))){
+            operands.push_back(createInitialPrefAddr(SCEVAdd_expr->getOperand(i)));
+          } else {
+            operands.push_back(SCEVAdd_expr->getOperand(i));
+          }
+        }
+        return SE->getAddExpr(operands);
+      }
+      case scUDivExpr: {
+        const SCEVUDivExpr * SCEVUDiv_expr = dyn_cast<SCEVUDivExpr>(expr);
+        SmallVector<const SCEV *, 2> operands;
+        for (unsigned i = 0; i < SCEVUDiv_expr->getNumOperands(); ++i){
+          if(SE->containsAddRecurrence(SCEVUDiv_expr->getOperand(i))){
+            operands.push_back(createInitialPrefAddr(SCEVUDiv_expr->getOperand(i)));
+          } else {
+            operands.push_back(SCEVUDiv_expr->getOperand(i));
+          }
+        }
+        return SE->getUDivExpr(operands[0], operands[1]);
+      }
+      case scUnknown:
+        return expr;
+      case scCouldNotCompute:
+      default:
+        llvm_unreachable("Attempt to use a SCEVCouldNotCompute object!");
+    }
+  } else {
+    const SCEVAddRecExpr *LSCEAddRec_expr = dyn_cast<SCEVAddRecExpr>(expr);
+    return LSCEAddRec_expr->getStart();
   }
 }
 
@@ -135,8 +233,8 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
 outs() << "start-------------------------------------\n";
 
   bool Changed = false;
-  findInductionVariables(L); // not used for now...
-
+  //findInductionVariables(L); // not used for now...
+L->dump();
 outs() << "-------------------------------------\n";
 
   for (const auto BB : L->blocks()) {
@@ -178,7 +276,8 @@ outs() << "-------------------------------------\n";
 
       outs() << "adding prefetch\n";
 
-      const SCEV *LSCEV = SE->getSCEV(LPtrOp);
+      if(GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)){
+      const SCEV *LSCEV = SE->getSCEV(gepi->getOperand(1));
       LSCEV->dump();
       const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
       if(LSCEVAddRec != nullptr){
@@ -186,20 +285,25 @@ outs() << "-------------------------------------\n";
         const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
         if(expr != nullptr){
           expr->dump();
-          //if (const SCEVConstant *C = dyn_cast<SCEVConstant>(expr->getOperand(1))) {
+          //TODO: does not have to be constant?
           if (const SCEVConstant *C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
             ConstantInt *CI = ConstantInt::get(SE->getContext(), C->getAPInt());
-            if (GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)) {
               IRBuilder<> Builder(gepi);
               gepi->getOperand(1)->dump();
               Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI);
               gepi->setOperand(1, prefAddr);
-            } else {
-              errs() << "LPtrOp not GEPI\n";
-            }
           }
-          // const SCEV *NextLSCEV = SE->getAddExpr(LSCEVAddRec, expr->getStepRecurrence(*SE));
-          // Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
+          const SCEV *t = SE->getPointerBase(LSCEVAddRec);
+          t->dump();
+
+          // const SCEV *NextLSCEV = SE->getAddExpr(LSCEV, SE->getNegativeSCEV(t));
+          // NextLSCEV->dump();
+          const SCEV *initLSCEV = createInitialPrefAddr(LSCEV);
+          outs() << "initLSCEV: ";
+          initLSCEV->dump();
+          // unsigned num_iterations = SE->getSmallConstantTripCount(L);
+          // outs() << "loop counts: " << num_iterations << "\n";
+          // const SCEV *NextLSCEV = SE->getAddExpr(LSCEVAddRec, SE->getMulExpr(SE->getNegativeSCEV(expr->getStepRecurrence(*SE)), SE->getConstant(expr->getStart()->getType(), num_iterations)));
           // SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
           // Value *PrefPtrValue = SCEVE.expandCodeFor(NextLSCEV, LPtrOp->getType(), MemI);
         } else {
@@ -208,6 +312,7 @@ outs() << "-------------------------------------\n";
       } else {
         continue;
       }
+      } else continue;
 
       // outs() << LSCEVAddRec;
       // LSCEVAddRec->dump();
@@ -253,7 +358,9 @@ outs() << "-------------------------------------\n";
 
     }
   }
-  outs() << "end-------------------------------------\n";
+
+  outs() <<  "Trip count for this loop is: " << SE->getSmallConstantTripCount(L);
+  outs() << "\nend-------------------------------------\n";
 
   return Changed;
 }

@@ -38,6 +38,7 @@ __kernel void matrixMul(__global float *A, __global float *B, __global float *C,
 	for (i=0; i<width; i=(i+32)){
 		int it_1;
 		shared_0[(tidx+0)]=A(idy, (i+tidx));
+		// shared_0[(tidx+0)]=A(tidy, i+1);
 		barrier(CLK_LOCAL_MEM_FENCE);
 
 		for (it_1=0; it_1<32; it_1=(it_1+1)){
