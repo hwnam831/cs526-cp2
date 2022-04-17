@@ -46,6 +46,8 @@ namespace {
     // Entry point for the overall scalar-replacement pass
     bool runOnFunction(Function &F);
     bool runOnLoop(Loop *L);
+    const SCEVAddRecExpr *findAddRecExpr(const SCEVNAryExpr * expr);
+    void findInductionVariables(Loop *L);
     // getAnalysisUsage - List passes required by this pass.  We also know it
     // will not alter the CFG, so say so.
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
@@ -75,12 +77,31 @@ static RegisterPass<GPUMemPrefetching> X("gpumempref",
 // Function runOnFunction:
 // Entry point for the overall GPUMemPrefetching function pass.
 // This function is provided to you.
-bool GPUMemPrefetching::runOnLoop(Loop *L) {
-  bool Changed = false;
+
+const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * expr){
+  // expr->dump();
+  if(!isa<SCEVAddRecExpr>(expr)){
+    for (unsigned i = 0; i < expr->getNumOperands(); ++i){
+      if(!isa<SCEVNAryExpr>(expr->getOperand(i)))
+        continue;
+
+      const SCEVNAryExpr * SCEVNAry_expr = dyn_cast<SCEVNAryExpr>(expr->getOperand(i));
+      const SCEVAddRecExpr * sub_expr = findAddRecExpr(SCEVNAry_expr);
+      if(sub_expr != nullptr)
+        return sub_expr;
+    }
+    return nullptr;
+  } else {
+    const SCEVAddRecExpr *LSCEAddRec_expr = dyn_cast<SCEVAddRecExpr>(expr);
+    return LSCEAddRec_expr;
+  }
+}
+
+void GPUMemPrefetching::findInductionVariables(Loop *L){
   BasicBlock *H = L->getHeader();
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
   if (!L->getIncomingAndBackEdge(Incoming, Backedge))
-    return Changed;  
+    return;  
 
   // Loop over all of the PHI nodes, looking for induction variables.
   for (BasicBlock::iterator I = H->begin(); I != H->end(); ++I) {
@@ -91,19 +112,30 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
     if(!SE->isSCEVable(back->getType()))
       continue;
 
-    const SCEV *LSCEV_back = SE->getSCEV(back);
-    const SCEVNAryExpr *LSCEVNAry_back = dyn_cast<SCEVNAryExpr>(LSCEV_back);
-    // TODO: check constant operand?
-    if(!LSCEVNAry_back)
+    const SCEV *LSCEV_back = SE->getSCEV(PN);
+
+    if(!isa<SCEVAddRecExpr>(LSCEV_back))
       errs() << "not supported stride type\n";
     else {
-      LSCEVNAry_back->dump();
-      LSCEVNAry_back->getType()->dump();
+      const SCEVAddRecExpr *LSCEAddRec_back = dyn_cast<SCEVAddRecExpr>(LSCEV_back);
+      LSCEAddRec_back->dump();
+      for (unsigned i = 0, e = LSCEAddRec_back->getNumOperands(); i != e; ++i)
+        outs() << *LSCEAddRec_back->getOperand(i);
+
       PN->dump();
       back->dump();
     }
     //ConstantInt *CI = dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Incoming))
   }
+}
+
+bool GPUMemPrefetching::runOnLoop(Loop *L) {
+outs() << "start-------------------------------------\n";
+
+  bool Changed = false;
+  findInductionVariables(L); // useless step for now...
+
+outs() << "-------------------------------------\n";
 
   for (const auto BB : L->blocks()) {
     for (auto &I : *BB) {
@@ -113,6 +145,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
       Value *LValOp;
       Instruction *MemI;
 
+      // only prefetch for stores from global memory to shared memory
       if (StoreInst *SMemI = dyn_cast<StoreInst>(&I)) {
         MemI = SMemI;
         PtrOp = SMemI->getPointerOperand();
@@ -126,7 +159,6 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
           continue;
       } else continue;
       
-      // only prefetch for stores from global memory to shared memory
       if (LoadInst *LMemI = dyn_cast<LoadInst>(ValOp)) {
         LMemI->dump();
         LPtrOp = LMemI->getPointerOperand();
@@ -144,22 +176,35 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
       outs() << "adding prefetch\n";
 
       const SCEV *LSCEV = SE->getSCEV(LPtrOp);
-
-      
-
       LSCEV->dump();
       const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
-      outs() << LSCEVAddRec;
-      LSCEVAddRec->dump();
-      outs() << LSCEVAddRec->getNumOperands() << "---\n";
-      LSCEVAddRec->getOperand(0)->dump();
-      const SCEVNAryExpr  *LSCEVAddRec2 = dyn_cast<SCEVNAryExpr>(LSCEVAddRec->getOperand(0));
-      LSCEVAddRec2->dump();
-      LSCEVAddRec2->getOperand(1)->dump();
-      outs() << "---\n";
-      const SCEVNAryExpr  *LSCEVAddRec3 = dyn_cast<SCEVNAryExpr>(LSCEVAddRec2->getOperand(1));
-      LSCEVAddRec3->dump();
-      LSCEVAddRec3->getOperand(2)->dump();
+      if(LSCEVAddRec != nullptr){
+        outs() << "finding addrecs\n";
+        const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
+        if(expr != nullptr){
+          expr->dump();
+          const SCEV *NextLSCEV = SE->getAddExpr(LSCEVAddRec, expr->getStepRecurrence(*SE));
+          Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
+          SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
+          Value *PrefPtrValue = SCEVE.expandCodeFor(NextLSCEV, I8Ptr, MemI);
+        } else {
+          outs() << ("finding nullptr\n");
+        }
+      } else {
+        continue;
+      }
+
+      // outs() << LSCEVAddRec;
+      // LSCEVAddRec->dump();
+      // outs() << LSCEVAddRec->getNumOperands() << "---\n";
+      // LSCEVAddRec->getOperand(0)->dump();
+      // const SCEVNAryExpr  *LSCEVAddRec2 = dyn_cast<SCEVNAryExpr>(LSCEVAddRec->getOperand(0));
+      // LSCEVAddRec2->dump();
+      // LSCEVAddRec2->getOperand(1)->dump();
+      // outs() << "---\n";
+      // const SCEVNAryExpr  *LSCEVAddRec3 = dyn_cast<SCEVNAryExpr>(LSCEVAddRec2->getOperand(1));
+      // LSCEVAddRec3->dump();
+      // LSCEVAddRec3->getOperand(2)->dump();
 
       // Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
       // SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
@@ -193,6 +238,8 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
 
     }
   }
+  outs() << "end-------------------------------------\n";
+
   return Changed;
 }
 bool GPUMemPrefetching::runOnFunction(Function &F) {
