@@ -36,6 +36,8 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
+#include "llvm/IR/IRBuilder.h"
+
 using namespace llvm;
 
 namespace {
@@ -158,8 +160,9 @@ outs() << "-------------------------------------\n";
         if (PtrAddrSpace != 3)
           continue;
       } else continue;
-      
-      if (LoadInst *LMemI = dyn_cast<LoadInst>(ValOp)) {
+
+      LoadInst *LMemI;
+      if (LMemI = dyn_cast<LoadInst>(ValOp)) {
         LMemI->dump();
         LPtrOp = LMemI->getPointerOperand();
         LPtrOp->dump();
@@ -183,12 +186,22 @@ outs() << "-------------------------------------\n";
         const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
         if(expr != nullptr){
           expr->dump();
-          IRBuilder Builder(MemI);
-          Value *prefAddr = Builder.CreateAdd(LPtrOp, ConstantInt::get(expr->getStepRecurrence(*SE)->getType(), expr->getOperand(1), true));
-          const SCEV *NextLSCEV = SE->getAddExpr(LSCEVAddRec, expr->getStepRecurrence(*SE));
-          Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
-          SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
-          Value *PrefPtrValue = SCEVE.expandCodeFor(NextLSCEV, I8Ptr, MemI);
+          //if (const SCEVConstant *C = dyn_cast<SCEVConstant>(expr->getOperand(1))) {
+          if (const SCEVConstant *C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
+            ConstantInt *CI = ConstantInt::get(SE->getContext(), C->getAPInt());
+            if (GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)) {
+              IRBuilder<> Builder(gepi);
+              gepi->getOperand(1)->dump();
+              Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI);
+              gepi->setOperand(1, prefAddr);
+            } else {
+              errs() << "LPtrOp not GEPI\n";
+            }
+          }
+          //const SCEV *NextLSCEV = SE->getAddExpr(LSCEVAddRec, expr->getStepRecurrence(*SE));
+          //Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
+          //SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
+          //Value *PrefPtrValue = SCEVE.expandCodeFor(NextLSCEV, I8Ptr, MemI);
         } else {
           outs() << ("finding nullptr\n");
         }
