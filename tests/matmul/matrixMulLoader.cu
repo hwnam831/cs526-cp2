@@ -225,7 +225,7 @@ void printDiff(float *data1, float *data2, int width, int height)
     for (i=0; i<width; i++) {
       k = j*width+i;
       if (data1[k] != data2[k]) {
-         printf("diff(%d,%d) CPU=%4.4f, GPU=%4.4f n", i,j, data1[k], data2[k]);
+         printf("diff(%d,%d) CPU=%4.4f, GPU=%4.4f \n", i,j, data1[k], data2[k]);
          error_count++;
       }
     }
@@ -323,7 +323,8 @@ int main(int argc, char **argv)
     checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
 
     // setup execution parameters
-    dim3 threads(16, 16);
+    //dim3 threads(16, 16);
+    dim3 threads(32, 1);
     dim3 grid(WC / threads.x, HC / threads.y);
 
     int Width_A = WA;
