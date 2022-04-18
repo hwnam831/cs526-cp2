@@ -38,7 +38,7 @@ NVCCLIBS = -L$(CUDAROOT)/lib64 -lcudart_static -ldl -lrt -lpthread -lcuda -L$(CU
 CLCFLAGS = -emit-llvm -c -target -nvptx64-nvidial-nvcl -Dcl_clang_storage_class_specifiers\
  -I$(LLVMROOT)/include -include $(LLVMROOT)/include/clc/clcfunc.h -include $(LLVMROOT)/include/clc/clc.h -fpack-struct=64 \
  -Xclang -mlink-bitcode-file -Xclang $(LLVMROOT)/lib/clc/nvptx64--nvidiacl.bc -Dcl_khr_fp64  \
- -Xclang -fdeclare-opencl-builtins -Xclang -disable-O0-optnone -cl-std=CL2.0 -O0
+ -Xclang -fdeclare-opencl-builtins -Xclang -disable-O0-optnone -cl-std=CL2.0 -O1
 DEBUGOPTS =  -verify -loop-simplify -licm -mem2reg -inline -adce -sccp 
 
 test: $(TARGET)Loader $(TARGET).ptx.s

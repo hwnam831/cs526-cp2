@@ -1,5 +1,6 @@
 add_library(GPUMEMOPT MODULE
     # List your source files here.
+    utils.h
     gpumemopt.cpp
 )
 
