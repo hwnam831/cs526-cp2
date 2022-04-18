@@ -345,13 +345,18 @@ outs() << "start-------------------------------------\n";
             gepi->getOperand(0)->getType()->getPointerElementType()->dump();
             gepi->getOperand(0)->dump();
             PrefPtrValue->dump();
-            Value *temp = Builder.CreateGEP(gepi->getOperand(0)->getType()->getPointerElementType(), gepi->getOperand(0), PrefPtrValue);
-            Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), temp);
+            Value *tempAllocaPtr = Builder.CreateAlloca(gepi->getOperand(0)->getType()->getPointerElementType());
+            Value *initPrefAddr = Builder.CreateGEP(gepi->getOperand(0)->getType()->getPointerElementType(), gepi->getOperand(0), PrefPtrValue);
+            Value *initPrefVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), initPrefAddr);
+            Builder.CreateStore(initPrefVal, tempAllocaPtr);
             
+            Builder.SetInsertPoint(SMemI);
+            Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), tempAllocaPtr);
             SMemI->setOperand(0, tempVal);
             
             LMemI->moveAfter(SMemI->getNextNode()); //TODO: check the next immediate barrier inst
-            
+            Builder.SetInsertPoint(LMemI->getNextNode());
+            Builder.CreateStore(LMemI, tempAllocaPtr);
           } else {
             outs() << ("finding nullptr\n");
           }
