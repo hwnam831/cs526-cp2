@@ -83,6 +83,7 @@ static RegisterPass<GPUMemPrefetching> X("gpumempref",
 // Entry point for the overall GPUMemPrefetching function pass.
 // This function is provided to you.
 
+// This function finds the AddRecExpr (start, +, step) in expr. 
 // TODO: this only finds one addrecexpr for now 
 const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * expr){
   if(!isa<SCEVAddRecExpr>(expr)){
@@ -104,6 +105,7 @@ const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * exp
   }
 }
 
+// Create a new SCEV by replacing all AddRecExpr with all its initial value in the loop
 const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
   if(!isa<SCEVAddRecExpr>(expr)){
     switch (expr->getSCEVType()) {
@@ -205,6 +207,8 @@ outs() << "start-------------------------------------\n";
     errs() << "error in getIncomingAndBackEdge()!\n";
 
   outs() << "-------------------------------------\n";
+  // In order for SCEVExpander to be able to expand code for the computation of
+  // the first prefetch address, these values need to be available here
   for (const auto BB : L->blocks()) {
     for (auto &I : *BB) {
       if (CallInst *CI = dyn_cast<CallInst>(&I)){
