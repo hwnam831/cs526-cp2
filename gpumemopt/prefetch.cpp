@@ -37,7 +37,9 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
+#include "llvm/IR/InstrTypes.h"
 using namespace llvm;
 
 namespace {
@@ -83,13 +85,13 @@ static RegisterPass<GPUMemPrefetching> X("gpumempref",
 
 // TODO: containsAddRecurrence(...)
 const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * expr){
-  expr->dump();
+  // expr->dump();
   if(!isa<SCEVAddRecExpr>(expr)){
-    outs() << "sub-expr: \n";
+    // outs() << "sub-expr: \n";
     for (unsigned i = 0; i < expr->getNumOperands(); ++i){
       
       if(!SE->containsAddRecurrence(expr->getOperand(i))){
-        outs() << "done: ";
+        // outs() << "done: ";
         expr->getOperand(i)->dump();
         continue;
       }
@@ -107,9 +109,9 @@ const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * exp
 }
 
 const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
-  outs() << "createInitialPrefAddr-------------------------------------\n";
+  // outs() << "createInitialPrefAddr-------------------------------------\n";
 
-  expr->dump();
+  // expr->dump();
   
   if(!isa<SCEVAddRecExpr>(expr)){
     switch (expr->getSCEVType()) {
@@ -240,7 +242,11 @@ outs() << "start-------------------------------------\n";
 
   bool Changed = false;
   //findInductionVariables(L); // not used for now...
-  L->dump();
+
+  L->getHeader()->dump();
+  L->getHeader()->getTerminator()->getPrevNode()->dump(); //TODO:
+outs() << "??????\n";
+
   //TODO: find immediate dominator of this basic block
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
   if (!L->getIncomingAndBackEdge(Incoming, Backedge))
@@ -309,7 +315,7 @@ outs() << "start-------------------------------------\n";
       outs() << "adding prefetch\n";
 
       if(GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)){
-        const SCEV *LSCEV = SE->getSCEV(gepi->getOperand(1));//, L);AtScope
+        const SCEV *LSCEV = SE->getSCEVAtScope(gepi->getOperand(1), L);
         LSCEV->dump();
         const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
         if(LSCEVAddRec != nullptr){
@@ -318,8 +324,10 @@ outs() << "start-------------------------------------\n";
           if(expr != nullptr){
             expr->dump();
             //TODO: does not have to be constant?
-            if (const SCEVConstant *C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
-              ConstantInt *CI = ConstantInt::get(SE->getContext(), C->getAPInt());
+            const SCEVConstant *C;
+            ConstantInt *CI;
+            if (C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
+                CI = ConstantInt::get(SE->getContext(), C->getAPInt());
                 IRBuilder<> Builder(gepi);
                 gepi->getOperand(1)->dump();
                 Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI);
@@ -354,9 +362,29 @@ outs() << "start-------------------------------------\n";
             Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), tempAllocaPtr);
             SMemI->setOperand(0, tempVal);
             
-            LMemI->moveAfter(SMemI->getNextNode()); //TODO: check the next immediate barrier inst
-            Builder.SetInsertPoint(LMemI->getNextNode());
-            Builder.CreateStore(LMemI, tempAllocaPtr);
+            Builder.SetInsertPoint(SMemI->getNextNode()->getNextNode()); //TODO: check the next immediate barrier inst
+            L->getHeader()->dump();
+
+            if(BranchInst *loopGuardBr = dyn_cast<BranchInst>(L->getHeader()->getTerminator())){ 
+              if(ICmpInst *loopGuardCmp = dyn_cast<ICmpInst>(loopGuardBr->getPrevNode())){ //TODO: get operand 0 of the conditional br instead
+                loopGuardCmp->dump();
+                loopGuardCmp->getOperand(0)->dump();
+                Value *iter_next = Builder.CreateAdd(loopGuardCmp->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+                Value *check_res = Builder.CreateICmp(loopGuardCmp->getPredicate(), iter_next, loopGuardCmp->getOperand(1));
+                Instruction *ThenTerm , *ElseTerm;
+                SplitBlockAndInsertIfThenElse(check_res, (dyn_cast<ICmpInst>(check_res))->getNextNode(), &ThenTerm, &ElseTerm);
+
+                Builder.SetInsertPoint(ThenTerm);
+                LMemI->moveBefore(ThenTerm);
+                Builder.CreateStore(LMemI, tempAllocaPtr);
+
+              } else {
+                errs() << "loop header terminator's previous instruction is not icmp.\n";
+              }
+            } else {
+              errs() << "loop header terminator inst is not br.\n";
+            }
+            
           } else {
             outs() << ("finding nullptr\n");
           }
@@ -392,16 +420,7 @@ outs() << "start-------------------------------------\n";
       //   outs() << "strided\n";
       // }
 
-      // BasicBlock *Latch = L->getLoopLatch();
-      // if (BranchInst *BI = dyn_cast<BranchInst>(Latch->getTerminator())){
-      //   if (!BI->isConditional()){
-      //     for (Instruction& inst : *Latch){
-      //       inst.dump();
-      //       Value* op = inst.getOperand(0);
-      //       op->dump();
-      //     }
-      //   }
-      // }
+
 
 
 

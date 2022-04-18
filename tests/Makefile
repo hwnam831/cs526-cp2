@@ -39,7 +39,7 @@ CLCFLAGS = -emit-llvm -c -target -nvptx64-nvidial-nvcl -Dcl_clang_storage_class_
  -I$(LLVMROOT)/include -include $(LLVMROOT)/include/clc/clcfunc.h -include $(LLVMROOT)/include/clc/clc.h -fpack-struct=64 \
  -Xclang -mlink-bitcode-file -Xclang $(LLVMROOT)/lib/clc/nvptx64--nvidiacl.bc -Dcl_khr_fp64  \
  -Xclang -fdeclare-opencl-builtins -Xclang -disable-O0-optnone -cl-std=CL2.0 -O0
-DEBUGOPTS =  -verify -loop-simplify -licm -mem2reg -inline -adce -sccp 
+DEBUGOPTS =  -verify -loop-simplify -licm -mem2reg -inline -adce -sccp
 #DEBUGOPTS =  -verify
 
 test: $(TARGET)Loader $(TARGET).ptx.s
