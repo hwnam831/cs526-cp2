@@ -83,15 +83,11 @@ static RegisterPass<GPUMemPrefetching> X("gpumempref",
 // Entry point for the overall GPUMemPrefetching function pass.
 // This function is provided to you.
 
-// TODO: containsAddRecurrence(...)
 const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * expr){
-  // expr->dump();
   if(!isa<SCEVAddRecExpr>(expr)){
-    // outs() << "sub-expr: \n";
     for (unsigned i = 0; i < expr->getNumOperands(); ++i){
       
       if(!SE->containsAddRecurrence(expr->getOperand(i))){
-        // outs() << "done: ";
         expr->getOperand(i)->dump();
         continue;
       }
@@ -109,10 +105,6 @@ const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * exp
 }
 
 const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
-  // outs() << "createInitialPrefAddr-------------------------------------\n";
-
-  // expr->dump();
-  
   if(!isa<SCEVAddRecExpr>(expr)){
     switch (expr->getSCEVType()) {
       case scConstant:
@@ -169,9 +161,6 @@ const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
       case scAddExpr: {
         const SCEVAddExpr * SCEVAdd_expr = dyn_cast<SCEVAddExpr>(expr);
         SmallVector<const SCEV *, 5> operands;
-        // outs() << "aaaaaa--------------------\n";
-        //     SCEVAdd_expr->getOperand(0)->dump();
-        // outs() << "aaaaaa--------------------\n";
         for (unsigned i = 0; i < SCEVAdd_expr->getNumOperands(); ++i){
           if(SE->containsAddRecurrence(SCEVAdd_expr->getOperand(i))){
             operands.push_back(createInitialPrefAddr(SCEVAdd_expr->getOperand(i)));
@@ -205,62 +194,24 @@ const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
   }
 }
 
-void GPUMemPrefetching::findInductionVariables(Loop *L){
-  BasicBlock *H = L->getHeader();
-  BasicBlock *Incoming = nullptr, *Backedge = nullptr;
-  if (!L->getIncomingAndBackEdge(Incoming, Backedge))
-    return;  
-
-  // Loop over all of the PHI nodes, looking for induction variables.
-  for (BasicBlock::iterator I = H->begin(); I != H->end(); ++I) {
-    if(!isa<PHINode>(I))
-      continue;
-    PHINode *PN = cast<PHINode>(I);
-    Value * back = PN->getIncomingValueForBlock(Backedge);
-    if(!SE->isSCEVable(back->getType()))
-      continue;
-
-    const SCEV *LSCEV_back = SE->getSCEV(PN);
-
-    if(!isa<SCEVAddRecExpr>(LSCEV_back))
-      errs() << "not supported stride type\n";
-    else {
-      const SCEVAddRecExpr *LSCEAddRec_back = dyn_cast<SCEVAddRecExpr>(LSCEV_back);
-      LSCEAddRec_back->dump();
-      for (unsigned i = 0, e = LSCEAddRec_back->getNumOperands(); i != e; ++i)
-        outs() << *LSCEAddRec_back->getOperand(i);
-
-      PN->dump();
-      back->dump();
-    }
-    //ConstantInt *CI = dyn_cast<ConstantInt>(PN->getIncomingValueForBlock(Incoming))
-  }
-}
-
 bool GPUMemPrefetching::runOnLoop(Loop *L) {
 outs() << "start-------------------------------------\n";
 
   bool Changed = false;
-  //findInductionVariables(L); // not used for now...
-
-  L->getHeader()->dump();
-  L->getHeader()->getTerminator()->getPrevNode()->dump(); //TODO:
-outs() << "??????\n";
 
   //TODO: find immediate dominator of this basic block
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
   if (!L->getIncomingAndBackEdge(Incoming, Backedge))
-    outs() << "here!\n";
-  Incoming->dump();
-  //L->dumpVerbose();
+    errs() << "error in getIncomingAndBackEdge()!\n";
+
   outs() << "-------------------------------------\n";
   for (const auto BB : L->blocks()) {
     for (auto &I : *BB) {
       if (CallInst *CI = dyn_cast<CallInst>(&I)){
-        //CI->dump();
         auto funcname = CI->getCalledFunction()->getName();
         if(L->hasLoopInvariantOperands(CI)){
           // CI->moveBefore(Incoming->getTerminator());
+          // TODO: this adds redundant codes
           if(funcname == "llvm.nvvm.read.ptx.sreg.tid.x" ||
           funcname == "llvm.nvvm.read.ptx.sreg.tid.y" ||
           funcname == "llvm.nvvm.read.ptx.sreg.ctaid.x" || 
@@ -333,26 +284,16 @@ outs() << "??????\n";
                 Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI);
                 gepi->setOperand(1, prefAddr);
             }
-            // const SCEV *t = SE->getPointerBase(LSCEVAddRec);
-            // t->dump();
 
-            // const SCEV *NextLSCEV = SE->getAddExpr(LSCEV, SE->getNegativeSCEV(t));
-            // NextLSCEV->dump();
             const SCEV *initLSCEV = createInitialPrefAddr(LSCEV);
-            Incoming->dump();
             outs() << "initLSCEV: ";
             initLSCEV->dump();
 
             SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
             Value *PrefPtrValue = SCEVE.expandCodeFor(initLSCEV, gepi->getOperand(1)->getType(), Incoming->getTerminator());
             PrefPtrValue->dump();
-            // Value *PrefPtrValue = SCEVE.expandCodeFor(initLSCEV, gepi->getOperand(1)->getType(), MemI);
+
             IRBuilder<> Builder(Incoming->getTerminator());
-            outs() << "gepi num operands: " << gepi->getNumOperands() << "\n";
-            gepi->dump();
-            gepi->getOperand(0)->getType()->getPointerElementType()->dump();
-            gepi->getOperand(0)->dump();
-            PrefPtrValue->dump();
             Value *tempAllocaPtr = Builder.CreateAlloca(gepi->getOperand(0)->getType()->getPointerElementType());
             Value *initPrefAddr = Builder.CreateGEP(gepi->getOperand(0)->getType()->getPointerElementType(), gepi->getOperand(0), PrefPtrValue);
             Value *initPrefVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), initPrefAddr);
@@ -392,40 +333,6 @@ outs() << "??????\n";
           continue;
         }
       } else continue;
-
-      // outs() << LSCEVAddRec;
-      // LSCEVAddRec->dump();
-      // outs() << LSCEVAddRec->getNumOperands() << "---\n";
-      // LSCEVAddRec->getOperand(0)->dump();
-      // const SCEVNAryExpr  *LSCEVAddRec2 = dyn_cast<SCEVNAryExpr>(LSCEVAddRec->getOperand(0));
-      // LSCEVAddRec2->dump();
-      // LSCEVAddRec2->getOperand(1)->dump();
-      // outs() << "---\n";
-      // const SCEVNAryExpr  *LSCEVAddRec3 = dyn_cast<SCEVNAryExpr>(LSCEVAddRec2->getOperand(1));
-      // LSCEVAddRec3->dump();
-      // LSCEVAddRec3->getOperand(2)->dump();
-
-      // Type *I8Ptr = Type::getInt8PtrTy(BB->getContext(), 0/*PtrAddrSpace*/);
-      // SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
-      // outs() << "NULL? " << I8Ptr << "\n";
-      // Value *PrefPtrValue = SCEVE.expandCodeFor(LSCEVAddRec3->getOperand(2), I8Ptr, MemI);
-
-      // const SCEVAddExpr *LSCEVAddRec4 = dyn_cast<SCEVAddExpr>(LSCEVAddRec3->getOperand(2));
-      // LSCEVAddRec4->dump();
-      // const SCEVAddExpr *LSCEVAddRec = dyn_cast<SCEVAddExpr>(LSCEV);
-      // if (!LSCEVAddRec){
-      //   outs() << "not strided\n";
-      //   continue;
-      // } else {
-      //   outs() << "strided\n";
-      // }
-
-
-
-
-
-      //BranchI->dump();
-
     }
   }
 
