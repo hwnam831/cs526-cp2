@@ -83,12 +83,12 @@ static RegisterPass<GPUMemPrefetching> X("gpumempref",
 // Entry point for the overall GPUMemPrefetching function pass.
 // This function is provided to you.
 
+// TODO: this only finds one addrecexpr for now 
 const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * expr){
   if(!isa<SCEVAddRecExpr>(expr)){
     for (unsigned i = 0; i < expr->getNumOperands(); ++i){
       
       if(!SE->containsAddRecurrence(expr->getOperand(i))){
-        expr->getOperand(i)->dump();
         continue;
       }
 
