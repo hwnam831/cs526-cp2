@@ -201,7 +201,7 @@ outs() << "start-------------------------------------\n";
   L->dump();
   bool Changed = false;
 
-  //TODO: find immediate dominator of this basic block
+  //TODO: find immediate dominator?
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
   if (!L->getIncomingAndBackEdge(Incoming, Backedge))
     errs() << "error in getIncomingAndBackEdge()!\n";
