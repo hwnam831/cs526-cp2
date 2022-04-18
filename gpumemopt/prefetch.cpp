@@ -198,7 +198,7 @@ const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
 
 bool GPUMemPrefetching::runOnLoop(Loop *L) {
 outs() << "start-------------------------------------\n";
-
+  L->dump();
   bool Changed = false;
 
   //TODO: find immediate dominator of this basic block
@@ -206,7 +206,6 @@ outs() << "start-------------------------------------\n";
   if (!L->getIncomingAndBackEdge(Incoming, Backedge))
     errs() << "error in getIncomingAndBackEdge()!\n";
 
-  outs() << "-------------------------------------\n";
   // In order for SCEVExpander to be able to expand code for the computation of
   // the first prefetch address, these values need to be available here
   for (const auto BB : L->blocks()) {
@@ -231,34 +230,26 @@ outs() << "start-------------------------------------\n";
   }
   for (const auto BB : L->blocks()) {
     for (auto &I : *BB) {
-      Value *PtrOp;
-      Value *LPtrOp;
-      Value *ValOp;
-      Value *LValOp;
-      Instruction *MemI;
-
       // only prefetch for stores from global memory to shared memory
       StoreInst *SMemI;
+      Value *ValOp;
       if (SMemI = dyn_cast<StoreInst>(&I)) {
-        MemI = SMemI;
-        PtrOp = SMemI->getPointerOperand();
+        Value *PtrOp = SMemI->getPointerOperand();
         ValOp = SMemI->getValueOperand();
         SMemI->dump();
         unsigned PtrAddrSpace = PtrOp->getType()->getPointerAddressSpace();
-        PtrOp->dump();
-        outs() << "store ptr addr space: " << PtrAddrSpace << "\n";
         // shared memory access address space 3
         if (PtrAddrSpace != 3)
           continue;
       } else continue;
 
       LoadInst *LMemI;
+      Value *LPtrOp;
       if (LMemI = dyn_cast<LoadInst>(ValOp)) {
         LMemI->dump();
         LPtrOp = LMemI->getPointerOperand();
         LPtrOp->dump();
         unsigned ValAddrSpace = LPtrOp->getType()->getPointerAddressSpace();
-        outs() << "value ptr addr space: " << ValAddrSpace << "\n";
         // global memory access address space 1
         if (ValAddrSpace != 1)
           continue;
