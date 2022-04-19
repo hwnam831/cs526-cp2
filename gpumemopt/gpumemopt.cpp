@@ -33,6 +33,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/ValueMap.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 using namespace llvm;
 
 STATISTIC(NumReplaced,  "Number of aggregate allocas broken up");
@@ -47,6 +48,7 @@ namespace {
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.addRequired<LoopInfoWrapperPass>();
+      AU.addRequired<DominatorTreeWrapperPass>();
     }
 
   private:
@@ -62,8 +64,8 @@ static RegisterPass<GPUMemCoalescing> X("gpumemcoal",
 
 /**
  * Only works when within a for-loop
- * 1) Identify IV/TID and analyze increment coefficients
- * 2) Identify their base address when IV/TID
+ * 1) Identify IV/TID and analyze increment coefficients -- done
+ * 2) Identify their base address when IV/TID -- done
  * 3) Create tiled inner loop. Put everything inside.
  * 4) Outer IV -> IV*16, Replace all IV uses with IV*16+NewIV
  * 5) Global->shared load + syncthreads on outer loop. If segment size is 16 --> No loop. If 16x16, create loop
@@ -98,7 +100,7 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
     ValueMap<GetElementPtrInst*, int> Segdims; //0,1, or 2
     ValueMap<GetElementPtrInst*, Value*> Baseaddr; //0,1, or 2
     auto IV = loop->getCanonicalInductionVariable();
-    IV->dump();
+    //IV->dump();
     
     //loop->addChildLoop
     
@@ -107,8 +109,8 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
     errs() << "Found induction variable\n";
     AnalyzeIncrement(IV, IVincr, 1);
 
-
-    for(auto B: loop->getBlocks()){
+    for(auto& B: loop->getBlocks()){
+      PHINode* lastphi;
       for (Instruction& inst : *B){
         if (CAST(GetElementPtrInst, GEPI, &inst)){
           if(GEPI->getAddressSpace() == 1 &&
@@ -145,16 +147,74 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
               Baseaddr.insert(std::make_pair(GEPI, baddr));
             }
           }
-          /**
-          GEPI->dump();
-          errs() << "addrspace " << GEPI->getAddressSpace() << "\n";
-          errs() << "ptr addrspace " << GEPI->getPointerAddressSpace() << "\n";
-          errs() << "numindices " << GEPI->getNumIndices() << "\n";
-          GEPI->idx_begin()->get()->dump();
-          errs() << '\n';
-          */
-        } 
+          
+        } else if (CAST(PHINode, PN, &inst)){
+          lastphi = PN;
+        }
       }
+
+      //Start loop transformation.
+      //Create outer loops, move necessary instructions
+      //Make i++ -> i+=16
+      //Introduce internal IV, replacealluseswith
+      DominatorTree& DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+      llvm::StringRef basename = B->getName();
+      BasicBlock* outercond = SplitBlock(B, dyn_cast<Instruction>(lastphi), &DT, 
+                                &loops,NULL, basename + ".outer.cond", false);
+      BasicBlock* outerhead = IV->getParent();
+      auto IVop = IV->getIncomingValue(1);
+
+      //Want this to be increment operation
+      assert(isa<Instruction>(IVop));
+        
+      errs() << "Identified IV increment op";
+      IVop->dump();
+      DominatorTree& DT2 = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+      
+      BasicBlock* innerloop = SplitBlock(outercond, dyn_cast<Instruction>(IVop), &DT, 
+                                &loops,NULL, basename + ".innerloop", true);
+                                
+      if(CAST(BinaryOperator, BO, IVop)){
+        assert (BO->getOpcode() == Instruction::BinaryOps::Add);
+        assert (isa<ConstantInt>(BO->getOperand(1)));
+        int val = dyn_cast<ConstantInt>(BO->getOperand(1))->getSExtValue();
+        
+        BO->setOperand(1, ConstantInt::get(BO->getType(), val*16));
+        
+      } else {
+        errs() << "Not well formed IV\n";
+      }
+
+      
+      //Create internal IV
+      IRBuilder<> builder_front(&*(innerloop->getFirstInsertionPt()));
+
+      Instruction* terminator = innerloop->getTerminator();
+      IRBuilder<> builder_end(terminator);
+      Type* IVType = IV->getType();
+      PHINode *newIV = builder_front.CreatePHI(IVType, 2); // assert that numpredecessors=2
+      
+      auto increment = builder_end.CreateAdd(newIV, ConstantInt::get(IVType, 1));
+      auto compare = builder_end.CreateICmpEQ(increment, ConstantInt::get(IVType, 16));
+      auto newbranch = builder_end.CreateCondBr(compare, outerhead, innerloop);
+      terminator->eraseFromParent();
+      newIV->addIncoming(ConstantInt::get(IVType, 0), outerhead);
+      newIV->addIncoming(increment, innerloop);
+      auto IV2 = builder_front.CreateAdd(newIV, IV);
+      std::vector<Use*> toReplace;
+      for (auto& U: IV->uses()){
+        User* usr = U.getUser();
+        if(CAST(Instruction, Inst, usr)){
+          if(Inst==IV2 || Inst==IVop)
+            continue;
+          toReplace.push_back(&U);
+        }
+      }
+      for (auto U: toReplace){
+        U->set(IV2);
+      }
+      
+
     }
   }
   bool Changed = false;
