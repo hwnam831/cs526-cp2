@@ -111,6 +111,7 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
 
     for(auto& B: loop->getBlocks()){
       PHINode* lastphi;
+      std::vector<PHINode*> oldphis;
       for (Instruction& inst : *B){
         if (CAST(GetElementPtrInst, GEPI, &inst)){
           if(GEPI->getAddressSpace() == 1 &&
@@ -149,6 +150,7 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
           }
           
         } else if (CAST(PHINode, PN, &inst)){
+          oldphis.push_back(PN);
           lastphi = PN;
         }
       }
@@ -190,16 +192,26 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
       IRBuilder<> builder_front(&*(innerloop->getFirstInsertionPt()));
 
       Instruction* terminator = innerloop->getTerminator();
-      IRBuilder<> builder_end(terminator);
+      PHINode *newIV;
+      for (auto OPN: oldphis){
+        PHINode *NPN = builder_front.CreatePHI(OPN->getType(), 2);// assert that numpredecessors=2
+        if (OPN == IV){
+          newIV = NPN;
+        } else {
+          OPN->replaceAllUsesWith(NPN);
+          NPN->addIncoming(OPN, outerhead);
+          NPN->addIncoming(OPN->getIncomingValue(1), innerloop);
+        } 
+      }
       Type* IVType = IV->getType();
-      PHINode *newIV = builder_front.CreatePHI(IVType, 2); // assert that numpredecessors=2
       
-      auto increment = builder_end.CreateAdd(newIV, ConstantInt::get(IVType, 1));
-      auto compare = builder_end.CreateICmpEQ(increment, ConstantInt::get(IVType, 16));
-      auto newbranch = builder_end.CreateCondBr(compare, outercond, innerloop);
+      auto increment = BinaryOperator::CreateAdd(newIV, ConstantInt::get(IVType, 1),"new.iv", terminator);
+      auto compare = ICmpInst::Create(Instruction::ICmp, CmpInst::ICMP_EQ,
+                                      increment, ConstantInt::get(IVType, 16), "", terminator);
+      auto newbranch = BranchInst::Create(outercond, innerloop, compare);
       newbranch->setSuccessor(0, outercond);
       newbranch->setSuccessor(1, innerloop);
-      terminator->eraseFromParent();
+      ReplaceInstWithInst(terminator, newbranch);
       newIV->addIncoming(ConstantInt::get(IVType, 0), outerhead);
       newIV->addIncoming(increment, innerloop);
       auto IV2 = builder_front.CreateAdd(newIV, IV);
