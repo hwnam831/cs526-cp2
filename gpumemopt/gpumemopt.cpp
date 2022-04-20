@@ -59,7 +59,7 @@ namespace {
 char GPUMemCoalescing::ID = 0;
 static RegisterPass<GPUMemCoalescing> X("gpumemcoal",
 			    "GPU Memory coalescing pass",
-			    false /* does not modify the CFG */,
+			    true /* does not modify the CFG */,
 			    false /* transformation, not just analysis */);
 
 /**
@@ -196,7 +196,9 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
       
       auto increment = builder_end.CreateAdd(newIV, ConstantInt::get(IVType, 1));
       auto compare = builder_end.CreateICmpEQ(increment, ConstantInt::get(IVType, 16));
-      auto newbranch = builder_end.CreateCondBr(compare, outerhead, innerloop);
+      auto newbranch = builder_end.CreateCondBr(compare, outercond, innerloop);
+      newbranch->setSuccessor(0, outercond);
+      newbranch->setSuccessor(1, innerloop);
       terminator->eraseFromParent();
       newIV->addIncoming(ConstantInt::get(IVType, 0), outerhead);
       newIV->addIncoming(increment, innerloop);
@@ -213,6 +215,7 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
       for (auto U: toReplace){
         U->set(IV2);
       }
+      
       
 
     }

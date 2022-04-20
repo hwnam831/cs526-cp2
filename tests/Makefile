@@ -53,7 +53,7 @@ all:
 cleanAll:
 	$(call CLEANFOREACH)
 
-gpumemopt:
+gpumemopt: $(LEVEL)/gpumemopt/gpumemopt.cpp $(LEVEL)/gpumemopt/utils.h
 	cmake --build ../../build	
 
 %.ll: %.bc
@@ -65,13 +65,13 @@ $(TARGET)Loader: $(TARGET)Loader.cu
 %.nvvm.bc: %_kernel.cl
 	$(LLVMGCC) $< -o $@ $(CLCFLAGS)
 
-%.debug.bc: %.nvvm.bc
-	$(LLVMOPT) $(DEBUGOPTS) -o=$@ < $<
-
-%.opt.bc: %.debug.bc gpumemopt
+%.debug.bc: %.nvvm.bc gpumemopt
 	$(LLVMOPT) -load $(OPTLIB) --gpumemcoal -disable-verify -o=$@ < $<
 
-%.ptx.s: %.nvvm.ll
+%.opt.bc: %.nvvm.bc gpumemopt
+	$(LLVMOPT) -load $(OPTLIB) --gpumemcoal -o=$@ < $<
+
+%.ptx.s: %.opt.ll
 	$(LLC) -mcpu=sm_61 -march=nvptx64 $< -o $@
 
 clean:
