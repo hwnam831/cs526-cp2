@@ -66,10 +66,10 @@ $(TARGET)Loader: $(TARGET)Loader.cu
 	$(LLVMGCC) $< -o $@ $(CLCFLAGS)
 
 %.debug.bc: %.nvvm.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) --gpumemcoal -disable-verify -o=$@ < $<
+	$(LLVMOPT) -load $(OPTLIB) --gpumemopt -disable-verify -o=$@ < $<
 
 %.opt.bc: %.nvvm.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) --gpumemcoal -o=$@ < $<
+	$(LLVMOPT) -load $(OPTLIB) --gpumemopt -o=$@ < $<
 
 %.ptx.s: %.opt.ll
 	$(LLC) -mcpu=sm_61 -march=nvptx64 $< -o $@

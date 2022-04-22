@@ -26,5 +26,5 @@ __kernel void matrixMul(__global float *A, __global float *B, __global float *C,
 		sum += a*b;
 	}
 	C(idy, idx) = sum;
-	barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
+	//barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
 }
