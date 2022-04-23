@@ -255,6 +255,24 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
       }
     }
 
+    for (auto GEPI: Noncoalesced){
+      // SKIP segdims == 0 because it will hit the l1 cache
+      auto IDX = GEPI->idx_begin()->get();
+      int ivinc = IVincr.count(IDX) ? IVincr[IDX] : 0;
+      int tidinc = TIDincr.count(IDX) ? TIDincr[IDX] : 0;
+      Value* sharedAddr;
+      Value* sharedIdx;
+      if (ivinc == 1 && tidinc == 0){
+        
+      } else if (ivinc==1 && tidinc > 0){
+        //create loop and reverse iv/tid
+      } else if (ivinc > 0 && ivinc <= 8 && tidinc == 0){
+        //should we count this case?
+      } else if (ivinc > 0 && ivinc <= 8 && tidinc > 0){
+        
+      }
+    }
+
   }
   bool Changed = false;
   return Changed;
