@@ -230,7 +230,7 @@ outs() << "start-------------------------------------\n";
   }
   for (const auto BB : L->blocks()) {
     for (auto &I : *BB) {
-      // only prefetch for stores from global memory to shared memory
+      // only prefetch for loads from global memory that stores to shared memory
       StoreInst *SMemI;
       Value *ValOp;
       if (SMemI = dyn_cast<StoreInst>(&I)) {
