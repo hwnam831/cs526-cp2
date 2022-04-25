@@ -2,6 +2,7 @@ add_library(GPUMEMOPT MODULE
     # List your source files here.
     utils.h
     gpumemopt.cpp
+    prefetch.cpp
 )
 
 # Use C++11 to compile our pass (i.e., supply -std=c++11).
