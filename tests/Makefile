@@ -70,10 +70,10 @@ $(TARGET)Loader: $(TARGET)Loader.cu
 	$(LLVMGCC) $< -o $@ $(CLCFLAGS)
 
 %.debug.bc: %.nvvm.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) --gpumemopt -disable-verify -o=$@ < $<
+	$(LLVMOPT) -load $(OPTLIB) -o=$@ < $<
 
 %.opt.bc: %.nvvm.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) --gpumemopt < $< | \
+	$(LLVMOPT) -load $(OPTLIB) --gpumempref < $< | \
 	$(LLVMOPT) -O2 -o=$@
 
 %.ptx.s: %.ll
