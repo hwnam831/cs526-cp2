@@ -314,7 +314,7 @@ int main(int argc, char **argv)
     //computeGold(h_A, h_B, num_elements, reference);
 
     // setup execution parameters
-    int block_width = 256;
+    int block_width = 32;
 
     cublasStrsm('L', 'L', 'N', 'N', num_elements, num_elements, 1.0, (float*)d_A, num_elements, (float*)d_C, num_elements);
     cudaDeviceSynchronize();

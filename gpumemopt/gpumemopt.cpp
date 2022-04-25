@@ -20,6 +20,7 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "scalarrepl"
+#define TILEDIM 32
 #include "utils.h"
 #include <iostream>
 #include "llvm/Transforms/Scalar.h"
@@ -90,6 +91,129 @@ static RegisterPass<GPUMemOpt> GMO("gpumemopt",
 			    true /* does modify the CFG */,
 			    false /* transformation, not just analysis */);
 
+bool FindNoncoalesced(BasicBlock* B, ValueMap<Value*, int>& TIDincr,
+  ValueMap<Value*, int>& IVincr, std::vector<GetElementPtrInst*>& Noncoalesced,
+  ValueMap<GetElementPtrInst*, Value*>& Baseaddr, Instruction* splitpoint){
+  
+  for (Instruction& inst : *B){
+    if (CAST(GetElementPtrInst, GEPI, &inst)){
+      if(GEPI->getAddressSpace() == 1 &&
+        GEPI->getNumIndices() == 1){
+        GEPI->dump();
+        auto IDX = GEPI->idx_begin()->get();
+
+        int ivinc = IVincr.count(IDX) ? IVincr[IDX] : 0;
+        int tidinc = TIDincr.count(IDX) ? TIDincr[IDX] : 0;
+        
+        if(ivinc % 64 == 0 && tidinc == 1){
+          //errs() << "This GEPI is coalesced\n";
+          //errs() << "IV increment coefficient: " << ivinc << '\n';
+          //errs() << "Thread ID.x increment coefficient: " << tidinc << '\n';
+          //FindBaseAddress(IDX, IVincr, TIDincr);
+        } else {
+          //errs() << "This GEPI is not coalesced\n";
+          //errs() << "IV increment coefficient: " << ivinc << '\n';
+          //errs() << "Thread ID.x increment coefficient: " << tidinc << '\n';
+          Noncoalesced.push_back(GEPI);
+          IRBuilder<> builder(splitpoint);
+          Value* baddr = FindBaseAddress(builder, IDX, IVincr, TIDincr);
+          
+          //Null means zero. Assuming 64-bit address
+          if (baddr == NULL) {
+            Type* i64type = IntegerType::getInt64Ty(B->getParent()->getContext());
+            baddr = ConstantInt::get(i64type, 0);
+          } else if (CAST(Instruction, newpoint, baddr)){
+            splitpoint = newpoint;
+          }
+          //errs() << "Base address calculated: ";
+          //baddr->dump();
+          Baseaddr.insert(std::make_pair(GEPI, baddr));
+        }
+      }
+    }
+  }
+  return !Noncoalesced.empty();
+}
+
+Instruction* TileLoop(BasicBlock* B,PHINode* IV, Instruction* splitpoint, DominatorTree& DT,
+    BasicBlock* innerloop, BasicBlock* outercond){
+  llvm::StringRef basename = B->getName();
+  outercond = SplitBlock(B, splitpoint, &DT, 
+                            NULL,NULL, basename + ".outer.cond", false);
+  BasicBlock* outerhead = IV->getParent();
+  auto IVop = IV->getIncomingValue(1);
+
+  //Want this to be increment operation
+  assert(isa<Instruction>(IVop));
+  
+  innerloop = SplitBlock(outercond, dyn_cast<Instruction>(IVop), &DT, 
+                            NULL,NULL, basename + ".innerloop", true);
+                            
+  if(CAST(BinaryOperator, BO, IVop)){
+    assert (BO->getOpcode() == Instruction::BinaryOps::Add);
+    assert (isa<ConstantInt>(BO->getOperand(1)));
+    int val = dyn_cast<ConstantInt>(BO->getOperand(1))->getSExtValue();
+    
+    BO->setOperand(1, ConstantInt::get(BO->getType(), val*TILEDIM));
+    
+  } else {
+    errs() << "Not well formed IV\n";
+  }
+
+  
+  //Create internal IV
+  IRBuilder<> builder_front(&*(innerloop->getFirstInsertionPt()));
+
+  Instruction* terminator = innerloop->getTerminator();
+  PHINode *newIV;
+  for (auto &OPN: outerhead->phis()){
+    PHINode *NPN = builder_front.CreatePHI(OPN.getType(), 2);// assert that numpredecessors=2
+    if (&OPN == IV){
+      newIV = NPN;
+    } else {
+      OPN.replaceAllUsesWith(NPN);
+      NPN->addIncoming(&OPN, outerhead);
+      NPN->addIncoming(OPN.getIncomingValue(1), innerloop);
+    } 
+  }
+  Type* IVType = IV->getType();
+  
+  auto increment = BinaryOperator::CreateAdd(newIV, ConstantInt::get(IVType, 1),"new.iv", terminator);
+  auto compare = ICmpInst::Create(Instruction::ICmp, CmpInst::ICMP_EQ,
+                                  increment, ConstantInt::get(IVType, TILEDIM), "", terminator);
+  auto newbranch = BranchInst::Create(outercond, innerloop, compare);
+  newbranch->setSuccessor(0, outercond);
+  newbranch->setSuccessor(1, innerloop);
+  ReplaceInstWithInst(terminator, newbranch);
+  newIV->addIncoming(ConstantInt::get(IVType, 0), outerhead);
+  newIV->addIncoming(increment, innerloop);
+  auto IV2 = builder_front.CreateAdd(newIV, IV, IV->getName()+".new");
+  std::vector<Use*> toReplace;
+  for (auto& U: IV->uses()){
+    User* usr = U.getUser();
+    if(CAST(Instruction, Inst, usr)){
+      if(Inst==IV2 || Inst==IVop)
+        continue;
+      if(Inst->getParent() != innerloop)
+        continue;
+      toReplace.push_back(&U);
+    }
+  }
+  for (auto U: toReplace){
+    U->set(IV2);
+  }
+
+  IRBuilder<> outercond_end(outercond);
+  outercond_end.SetInsertPoint(outercond->getTerminator());
+  auto barrierFunc = B->getParent()->getParent()->getOrInsertFunction("llvm.nvvm.barrier0", 
+  FunctionType::get(Type::getVoidTy(B->getParent()->getContext()),false));
+  outercond_end.CreateCall(barrierFunc);
+  IRBuilder<> headerbuilder(outerhead);
+  headerbuilder.SetInsertPoint(outerhead->getTerminator());
+  headerbuilder.CreateCall(barrierFunc);
+  return newIV;
+}
+
 /**
  * Only works when within a for-loop
  * 1) Identify IV/TID and analyze increment coefficients -- done
@@ -101,6 +225,10 @@ static RegisterPass<GPUMemOpt> GMO("gpumemopt",
  */
 bool GPUMemCoalescing::runOnFunction(Function &F) {
   ValueMap<Value*, int> TIDincr;
+  Value* TIDX = nullptr;
+  Module* M = F.getParent();
+  auto barrierFunc = M->getOrInsertFunction("llvm.nvvm.barrier0", 
+    FunctionType::get(Type::getVoidTy(F.getContext()),false));
 
   for (BasicBlock& block : F){
     for (Instruction& inst : block){
@@ -115,6 +243,9 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
             errs() << "Found tid.x\n";
             AnalyzeIncrement(CI, TIDincr, 1);
           }
+          if (TIDX == nullptr){
+            TIDX = CI;
+          }
         }
       }
     }
@@ -125,7 +256,6 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
   for (auto loop : loops){
     ValueMap<Value*, int> IVincr;
     std::vector<GetElementPtrInst*> Noncoalesced;
-    ValueMap<GetElementPtrInst*, int> Segdims; //0,1, or 2
     ValueMap<GetElementPtrInst*, Value*> Baseaddr;
     auto IV = loop->getCanonicalInductionVariable();
     //IV->dump();
@@ -134,144 +264,165 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
 
     //Zero marks that this is the exact IV
     IVincr.insert(std::make_pair(IV, 0));
-    errs() << "Found induction variable\n";
+    //errs() << "Found induction variable\n";
     AnalyzeIncrement(IV, IVincr, 1);
     BasicBlock *B = IV->getParent();
+    auto basename = B->getName();
     Instruction* splitpoint = &*(B->getFirstInsertionPt());
-
-    for (Instruction& inst : *B){
-      if (CAST(GetElementPtrInst, GEPI, &inst)){
-        if(GEPI->getAddressSpace() == 1 &&
-          GEPI->getNumIndices() == 1){
-          GEPI->dump();
-          auto IDX = GEPI->idx_begin()->get();
-
-          int ivinc = IVincr.count(IDX) ? IVincr[IDX] : 0;
-          int tidinc = TIDincr.count(IDX) ? TIDincr[IDX] : 0;
-          
-          if(ivinc % 64 == 0 && tidinc == 1){
-            errs() << "This GEPI is coalesced\n";
-            //errs() << "IV increment coefficient: " << ivinc << '\n';
-            //errs() << "Thread ID.x increment coefficient: " << tidinc << '\n';
-            //FindBaseAddress(IDX, IVincr, TIDincr);
-          } else {
-            errs() << "This GEPI is not coalesced\n";
-            errs() << "IV increment coefficient: " << ivinc << '\n';
-            errs() << "Thread ID.x increment coefficient: " << tidinc << '\n';
-            int segdim = (ivinc>0)+(tidinc>0); //Cannot be 0 due to LICM
-            Segdims.insert(std::make_pair(GEPI, (ivinc>0)+(tidinc>0)));
-            Noncoalesced.push_back(GEPI);
-            IRBuilder<> builder(splitpoint);
-            Value* baddr = FindBaseAddress(builder, IDX, IVincr, TIDincr);
-            
-            //Null means zero. Assuming 64-bit address
-            if (baddr == NULL) {
-              Type* i64type = IntegerType::getInt64Ty(F.getContext());
-              baddr = ConstantInt::get(i64type, 0);
-            } else if (CAST(Instruction, newpoint, baddr)){
-              splitpoint = newpoint;
-            }
-            errs() << "Base address calculated: ";
-            baddr->dump();
-            Baseaddr.insert(std::make_pair(GEPI, baddr));
-          }
-        }
-        
-      }
-    }
-
     //Start loop transformation.
     //Create outer loops, move necessary instructions
     //Make i++ -> i+=16
     //Introduce internal IV, replacealluseswith
-    if(!Noncoalesced.empty()){
+    if(FindNoncoalesced(B, TIDincr, IVincr, Noncoalesced, Baseaddr, splitpoint)){
 
       DominatorTree& DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-      llvm::StringRef basename = B->getName();
-      BasicBlock* outercond = SplitBlock(B, splitpoint->getNextNonDebugInstruction(), &DT, 
-                                &loops,NULL, basename + ".outer.cond", false);
+      BasicBlock* outercond;
+      BasicBlock* innerloop;
+      Instruction* newIV = TileLoop(B, IV, splitpoint, DT, innerloop, outercond);
       BasicBlock* outerhead = IV->getParent();
-      auto IVop = IV->getIncomingValue(1);
+      outerhead->setName(basename+".outerhead");
+      for (auto GEPI: Noncoalesced){
+      // SKIP segdims == 0 because it will hit the l1 cache
+        auto IDX = GEPI->idx_begin()->get();
+        int ivinc = IVincr.count(IDX) ? IVincr[IDX] : 0;
+        int tidinc = TIDincr.count(IDX) ? TIDincr[IDX] : 0;
+        Value* sharedAddr;
+        Value* sharedIdx;
+        errs() << GEPI->getType() << "\n";
+        if (ivinc == 1 && tidinc == 0){
+          auto shrtype = ArrayType::get(GEPI->getResultElementType(), TILEDIM);
+          GlobalVariable* shr = new GlobalVariable(*F.getParent(),shrtype, false,
+            GlobalValue::LinkageTypes::InternalLinkage, UndefValue::get(shrtype),
+            "shared_" + GEPI->getPointerOperand()->getName().str(), nullptr, 
+            GlobalValue::NotThreadLocal, 3);
+          shr->setAlignment(MaybeAlign(4));
+          IRBuilder<> headerbuilder(outerhead);
+          auto baddr = Baseaddr[GEPI];
+          //Insert before the barrier
+          headerbuilder.SetInsertPoint(outerhead->getTerminator()->getPrevNode());
+          Value* i16_base;
+          if (baddr->getType() != IV->getType()){
+            i16_base = headerbuilder.CreateAdd(baddr, 
+              headerbuilder.CreateZExt(IV,baddr->getType()));
+          } else {
+            i16_base = headerbuilder.CreateAdd(baddr, IV);
+          }
+          Value* Ntidx = TIDX;
+          if (i16_base->getType() != TIDX->getType()){
+            Ntidx = headerbuilder.CreateZExt(TIDX,i16_base->getType());
+          }
+          Value* nidx = headerbuilder.CreateAdd(i16_base, Ntidx);
+          auto globalptr = headerbuilder.CreateGEP(GEPI->getPointerOperand(), nidx);
+          auto globalval = headerbuilder.CreateLoad(globalptr);
+          auto shrptr = headerbuilder.CreateGEP(shr, {ConstantInt::get(baddr->getType(),0), Ntidx});
+          headerbuilder.CreateStore(globalval, shrptr);
 
-      //Want this to be increment operation
-      assert(isa<Instruction>(IVop));
-        
-      errs() << "Identified IV increment op";
-      IVop->dump();
-      
-      BasicBlock* innerloop = SplitBlock(outercond, dyn_cast<Instruction>(IVop), &DT, 
-                                &loops,NULL, basename + ".innerloop", true);
-                                
-      if(CAST(BinaryOperator, BO, IVop)){
-        assert (BO->getOpcode() == Instruction::BinaryOps::Add);
-        assert (isa<ConstantInt>(BO->getOperand(1)));
-        int val = dyn_cast<ConstantInt>(BO->getOperand(1))->getSExtValue();
-        
-        BO->setOperand(1, ConstantInt::get(BO->getType(), val*16));
-        
-      } else {
-        errs() << "Not well formed IV\n";
-      }
+          auto newIV_addr = ZExtInst::Create(Instruction::CastOps::ZExt,
+            newIV, baddr->getType(), "",GEPI);
+          GetElementPtrInst* Ngepi = GetElementPtrInst::Create(nullptr, shr,
+            {ConstantInt::get(baddr->getType(),0), newIV_addr},GEPI->getName()+"_shared", GEPI);
+          
+          bool gepialive = false;
+          std::vector<Instruction*> to_erase;
+          for (auto U : GEPI->users()){
+            if (CAST(LoadInst, LI, U)){
+              auto NLI = new LoadInst(LI->getType(),Ngepi,"", LI);
+              LI->replaceAllUsesWith(NLI);
+              to_erase.push_back(LI);
+            } else {
+              gepialive = true;
+              errs() << "why is this alive?\n";
+            }
+          }
+          for(auto LI: to_erase){
+            LI->eraseFromParent();
+          }
+          if (!gepialive)
+            GEPI->eraseFromParent();
+          
+        } else if (ivinc==1 && tidinc > 0){
+          //create loop and reverse iv/tid
+          auto shrtype = ArrayType::get(GEPI->getResultElementType(), TILEDIM*TILEDIM);
+          GlobalVariable* shr = new GlobalVariable(*F.getParent(),shrtype, false,
+            GlobalValue::LinkageTypes::InternalLinkage, UndefValue::get(shrtype),
+            "shared_" + GEPI->getPointerOperand()->getName().str(), nullptr, 
+            GlobalValue::NotThreadLocal, 3);
+          shr->setAlignment(MaybeAlign(4));
 
-      
-      //Create internal IV
-      IRBuilder<> builder_front(&*(innerloop->getFirstInsertionPt()));
+          Instruction* barrier = outerhead->getTerminator()->getPrevNode();
+          
+          BasicBlock* nouterhead = SplitBlock(outerhead, barrier);
+          BasicBlock* loadloop = splitBlockBefore(nouterhead, barrier, 
+            nullptr, nullptr, nullptr, basename+".loadloop."+GEPI->getPointerOperand()->getName());
+          outerhead = barrier->getParent();
 
-      Instruction* terminator = innerloop->getTerminator();
-      PHINode *newIV;
-      for (auto &OPN: outerhead->phis()){
-        PHINode *NPN = builder_front.CreatePHI(OPN.getType(), 2);// assert that numpredecessors=2
-        if (&OPN == IV){
-          newIV = NPN;
-        } else {
-          OPN.replaceAllUsesWith(NPN);
-          NPN->addIncoming(&OPN, outerhead);
-          NPN->addIncoming(OPN.getIncomingValue(1), innerloop);
-        } 
-      }
-      Type* IVType = IV->getType();
-      
-      auto increment = BinaryOperator::CreateAdd(newIV, ConstantInt::get(IVType, 1),"new.iv", terminator);
-      auto compare = ICmpInst::Create(Instruction::ICmp, CmpInst::ICMP_EQ,
-                                      increment, ConstantInt::get(IVType, 16), "", terminator);
-      auto newbranch = BranchInst::Create(outercond, innerloop, compare);
-      newbranch->setSuccessor(0, outercond);
-      newbranch->setSuccessor(1, innerloop);
-      ReplaceInstWithInst(terminator, newbranch);
-      newIV->addIncoming(ConstantInt::get(IVType, 0), outerhead);
-      newIV->addIncoming(increment, innerloop);
-      auto IV2 = builder_front.CreateAdd(newIV, IV);
-      std::vector<Use*> toReplace;
-      for (auto& U: IV->uses()){
-        User* usr = U.getUser();
-        if(CAST(Instruction, Inst, usr)){
-          if(Inst==IV2 || Inst==IVop)
-            continue;
-          toReplace.push_back(&U);
+          IRBuilder<> loopbuilder(loadloop);
+          loopbuilder.SetInsertPoint(loadloop->getTerminator());
+          PHINode *LIV = loopbuilder.CreatePHI(IV->getType(), 2);
+          auto baddr = Baseaddr[GEPI];
+          auto iiv = loopbuilder.CreateAdd(IV, TIDX);
+          auto tidoffset = loopbuilder.CreateMul(LIV, ConstantInt::get(LIV->getType(), tidinc));
+          auto glboffset = loopbuilder.CreateAdd(iiv, tidoffset);
+          Value* gidx;
+          if(baddr->getType() != glboffset->getType()){
+            gidx = loopbuilder.CreateAdd(baddr, loopbuilder.CreateZExt(glboffset, baddr->getType()));
+          } else {
+            gidx = loopbuilder.CreateAdd(baddr, glboffset);
+          }
+          auto GGEP = loopbuilder.CreateGEP(GEPI->getPointerOperand(), gidx);
+          auto GLD = loopbuilder.CreateLoad(GGEP);
+          
+          auto livTile = loopbuilder.CreateMul(LIV, ConstantInt::get(LIV->getType(), TILEDIM));
+          auto sidx = loopbuilder.CreateAdd(livTile, TIDX);
+          if (sidx->getType() != baddr->getType()){
+            sidx = loopbuilder.CreateZExt(sidx, baddr->getType());
+          }
+          auto SGEP = loopbuilder.CreateGEP(shr, {ConstantInt::get(baddr->getType(), 0), sidx});
+          auto SST = loopbuilder.CreateStore(GLD, SGEP);
+
+          IRBuilder<> innerbuilder(GEPI);
+          auto tidxTile = innerbuilder.CreateMul(TIDX, ConstantInt::get(TIDX->getType(), TILEDIM));
+          auto nsidx = innerbuilder.CreateAdd(tidxTile, newIV);
+          if (nsidx->getType() != baddr->getType()){
+            nsidx = innerbuilder.CreateZExt(nsidx, baddr->getType());
+          }
+          auto Ngepi = innerbuilder.CreateGEP(shr, {ConstantInt::get(baddr->getType(), 0), nsidx});
+
+          bool gepialive = false;
+          std::vector<Instruction*> to_erase;
+          for (auto U : GEPI->users()){
+            if (CAST(LoadInst, LI, U)){
+              auto NLI = new LoadInst(LI->getType(),Ngepi,"", LI);
+              LI->replaceAllUsesWith(NLI);
+              to_erase.push_back(LI);
+            } else {
+              gepialive = true;
+              errs() << "why is this alive?\n";
+            }
+          }
+          for(auto LI: to_erase){
+            LI->eraseFromParent();
+          }
+          if (!gepialive)
+            GEPI->eraseFromParent();
+
+          auto increment = loopbuilder.CreateAdd(LIV, ConstantInt::get(IV->getType(), 1));
+          auto compare = loopbuilder.CreateICmpEQ(increment, ConstantInt::get(IV->getType(), TILEDIM));
+          auto newbranch = BranchInst::Create(nouterhead, loadloop, compare);
+          newbranch->setSuccessor(0, nouterhead);
+          newbranch->setSuccessor(1, loadloop);
+          ReplaceInstWithInst(loadloop->getTerminator(), newbranch);
+          LIV->addIncoming(ConstantInt::get(IV->getType(), 0), loadloop->getPrevNode());
+          LIV->addIncoming(increment, loadloop);
+        } else if (ivinc > 0 && ivinc <= 8 && tidinc == 0){
+          //should we count this case?
+        } else if (ivinc > 0 && ivinc <= 8 && tidinc > 0){
+          
         }
       }
-      for (auto U: toReplace){
-        U->set(IV2);
-      }
     }
 
-    for (auto GEPI: Noncoalesced){
-      // SKIP segdims == 0 because it will hit the l1 cache
-      auto IDX = GEPI->idx_begin()->get();
-      int ivinc = IVincr.count(IDX) ? IVincr[IDX] : 0;
-      int tidinc = TIDincr.count(IDX) ? TIDincr[IDX] : 0;
-      Value* sharedAddr;
-      Value* sharedIdx;
-      if (ivinc == 1 && tidinc == 0){
-        
-      } else if (ivinc==1 && tidinc > 0){
-        //create loop and reverse iv/tid
-      } else if (ivinc > 0 && ivinc <= 8 && tidinc == 0){
-        //should we count this case?
-      } else if (ivinc > 0 && ivinc <= 8 && tidinc > 0){
-        
-      }
-    }
+    
 
   }
   bool Changed = false;

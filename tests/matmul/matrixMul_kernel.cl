@@ -4,8 +4,8 @@
 #define bidy (get_group_id(1))
 #define tidx (get_local_id(0))
 #define tidy (get_local_id(1))
-#define blockDimX 16
-#define blockDimY 16
+#define blockDimX BLOCK_SIZE
+#define blockDimY 1
 #define idx (bidx*blockDimX+tidx)
 #define idy (bidy*blockDimY+tidy)
 #define WIDTH_A WA

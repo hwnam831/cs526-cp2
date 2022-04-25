@@ -41,11 +41,15 @@ CLCFLAGS = -emit-llvm -c -target -nvptx64-nvidial-nvcl -Dcl_clang_storage_class_
  -Xclang -fdeclare-opencl-builtins -Xclang -disable-O0-optnone -cl-std=CL2.0 -O1
 DEBUGOPTS =  -verify -loop-simplify -licm -mem2reg -inline -adce -sccp 
 
-test: $(TARGET)Loader $(TARGET).ptx.s
-	./$(TARGET)Loader $(TARGET).ptx.s $(TARGET)
+test: $(TARGET)Loader $(TARGET).opt.ptx.s
+	./$(TARGET)Loader $(TARGET).opt.ptx.s $(TARGET)
+
+original: $(TARGET)Loader $(TARGET).nvvm.ptx.s
+	./$(TARGET)Loader $(TARGET).nvvm.ptx.s $(TARGET)
+
 
 optimize: $(TARGET).opt.ll
-debug: $(TARGET).debug.ll
+debug: $(TARGET).debug.ll $(TARGET).nvvm.ll
 
 all: 
 	$(call RUNFOREACH)
@@ -69,9 +73,10 @@ $(TARGET)Loader: $(TARGET)Loader.cu
 	$(LLVMOPT) -load $(OPTLIB) --gpumemopt -disable-verify -o=$@ < $<
 
 %.opt.bc: %.nvvm.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) --gpumemopt -o=$@ < $<
+	$(LLVMOPT) -load $(OPTLIB) --gpumemopt < $< | \
+	$(LLVMOPT) -O2 -o=$@
 
-%.ptx.s: %.opt.ll
+%.ptx.s: %.ll
 	$(LLC) -mcpu=sm_61 -march=nvptx64 $< -o $@
 
 clean:

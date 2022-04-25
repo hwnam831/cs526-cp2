@@ -11,7 +11,7 @@
 #define COALESCED_NUM  16
 #define A(y,x) A[(y)*WIDTH_A+(x)]
 #define globalDimY 1
-#define blockDimX 256
+#define blockDimX 32
 #define blockDimY 1
 #define idx (bidx*blockDimX+tidx)
 #define idy (bidy*blockDimY+tidy)
