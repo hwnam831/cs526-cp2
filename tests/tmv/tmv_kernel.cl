@@ -6,7 +6,7 @@
 #define tidx (get_local_id(0))
 #define tidy (get_local_id(1))
 #define globalDimY 1
-#define blockDimX 256
+#define blockDimX 32
 #define blockDimY 1
 #define idx (bidx*blockDimX+tidx)
 #define idy (bidy*blockDimY+tidy)

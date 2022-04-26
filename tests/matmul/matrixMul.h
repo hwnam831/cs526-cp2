@@ -3,7 +3,7 @@
 #define _STRM_H_
 
 // Thread block size
-#define BLOCK_SIZE 16
+#define BLOCK_SIZE 32
 
 #define MW 1024
 // Matrix dimensions
