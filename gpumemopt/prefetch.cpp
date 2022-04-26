@@ -203,31 +203,35 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
 
   //TODO: find immediate dominator?
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
-  if (!L->getIncomingAndBackEdge(Incoming, Backedge))
-    errs() << "error in getIncomingAndBackEdge()!\n";
+  if (!L->getIncomingAndBackEdge(Incoming, Backedge)){
+    errs() << "unsupported loop form.\n";
+    return Changed;
+  }
 
   // In order for SCEVExpander to be able to expand code for the computation of
   // the first prefetch address, these values need to be available here
-  for (const auto BB : L->blocks()) {
-    for (auto &I : *BB) {
-      if (CallInst *CI = dyn_cast<CallInst>(&I)){
-        auto funcname = CI->getCalledFunction()->getName();
-        if(L->hasLoopInvariantOperands(CI)){
-          // CI->moveBefore(Incoming->getTerminator());
-          // TODO: this adds redundant codes
-          if(funcname == "llvm.nvvm.read.ptx.sreg.tid.x" ||
-          funcname == "llvm.nvvm.read.ptx.sreg.tid.y" ||
-          funcname == "llvm.nvvm.read.ptx.sreg.ctaid.x" || 
-          funcname == "llvm.nvvm.read.ptx.sreg.ctaid.y"){
-            IRBuilder<> Builder(Incoming->getTerminator());
-            Value* newCI = Builder.CreateCall(CI->getFunctionType(), CI->getCalledOperand());
-            CI->replaceAllUsesWith(newCI);
-            //CI->removeFromParent();
-          }
-        }
-      }
-    }
-  }
+  // Note that we start from -O1 which will do LICM for bidx/bidy/tidx/tidy
+  // for (const auto BB : L->blocks()) {
+  //   for (auto &I : *BB) {
+  //     if (CallInst *CI = dyn_cast<CallInst>(&I)){
+  //       auto funcname = CI->getCalledFunction()->getName();
+  //       if(L->hasLoopInvariantOperands(CI)){
+  //         // CI->moveBefore(Incoming->getTerminator());
+  //         // TODO: this adds redundant codes
+  //         if(funcname == "llvm.nvvm.read.ptx.sreg.tid.x" ||
+  //         funcname == "llvm.nvvm.read.ptx.sreg.tid.y" ||
+  //         funcname == "llvm.nvvm.read.ptx.sreg.ctaid.x" || 
+  //         funcname == "llvm.nvvm.read.ptx.sreg.ctaid.y"){
+  //           IRBuilder<> Builder(Incoming->getTerminator());
+  //           Value* newCI = Builder.CreateCall(CI->getFunctionType(), CI->getCalledOperand());
+  //           CI->replaceAllUsesWith(newCI);
+  //           CI->removeFromParent();
+  //           errs() << "MOVING \n";
+  //         }
+  //       }
+  //     }
+  //   }
+  // }
   for (const auto BB : L->blocks()) {
     for (auto &I : *BB) {
       // only prefetch for loads from global memory that stores to shared memory
@@ -278,45 +282,40 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
           const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
           if(expr != nullptr){
             expr->dump();
-            
-            const SCEVConstant *C;
-            ConstantInt *CI;
-            if (C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
-                CI = ConstantInt::get(SE->getContext(), C->getAPInt());
-                IRBuilder<> Builder(gepi);
-                gepi->getOperand(1)->dump();
-                Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI);
-                gepi->setOperand(1, prefAddr);
-            }
-
-            const SCEV *initLSCEV = createInitialPrefAddr(LSCEV);
-            errs() << "initLSCEV: ";
-            initLSCEV->dump();
-
-            SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
-            Value *PrefPtrValue = SCEVE.expandCodeFor(initLSCEV, gepi->getOperand(1)->getType(), Incoming->getTerminator());
-            PrefPtrValue->dump();
-
-            IRBuilder<> Builder(Incoming->getTerminator());
-            Value *tempAllocaPtr = Builder.CreateAlloca(gepi->getOperand(0)->getType()->getPointerElementType());
-            Value *initPrefAddr = Builder.CreateGEP(gepi->getOperand(0)->getType()->getPointerElementType(), gepi->getOperand(0), PrefPtrValue);
-            Value *initPrefVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), initPrefAddr);
-            Builder.CreateStore(initPrefVal, tempAllocaPtr);
-            
-            Builder.SetInsertPoint(SMemI);
-            Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), tempAllocaPtr);
-            SMemI->setOperand(0, tempVal);
-            
-            Builder.SetInsertPoint(SMemI->getNextNode()->getNextNode());
-            L->getHeader()->dump();
 
             if(BranchInst *loopGuardBr = dyn_cast<BranchInst>(Backedge->getTerminator())){ 
               if(loopGuardBr->isConditional()){
-                loopGuardBr->dump();
-                loopGuardBr->getOperand(0)->dump();
                 if(ICmpInst *loopGuardCmp = dyn_cast<ICmpInst>(loopGuardBr->getOperand(0))){
-                  loopGuardCmp->dump();
-                  loopGuardCmp->getOperand(0)->dump();
+                  const SCEVConstant *C;
+                  ConstantInt *CI;
+                  if (C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
+                      CI = ConstantInt::get(SE->getContext(), C->getAPInt());
+                      IRBuilder<> Builder(gepi);
+                      gepi->getOperand(1)->dump();
+                      Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI);
+                      gepi->setOperand(1, prefAddr);
+                  } else continue;
+                  Changed = true;
+                  const SCEV *initLSCEV = createInitialPrefAddr(LSCEV);
+                  errs() << "initLSCEV: ";
+                  initLSCEV->dump();
+
+                  SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
+                  Value *PrefPtrValue = SCEVE.expandCodeFor(initLSCEV, gepi->getOperand(1)->getType(), Incoming->getTerminator());
+                  PrefPtrValue->dump();
+
+                  IRBuilder<> Builder(Incoming->getTerminator());
+                  Value *tempAllocaPtr = Builder.CreateAlloca(gepi->getOperand(0)->getType()->getPointerElementType());
+                  Value *initPrefAddr = Builder.CreateGEP(gepi->getOperand(0)->getType()->getPointerElementType(), gepi->getOperand(0), PrefPtrValue);
+                  Value *initPrefVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), initPrefAddr);
+                  Builder.CreateStore(initPrefVal, tempAllocaPtr);
+                  
+                  Builder.SetInsertPoint(SMemI);
+                  Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), tempAllocaPtr);
+                  SMemI->setOperand(0, tempVal);
+                  
+                  Builder.SetInsertPoint(SMemI->getNextNode()->getNextNode());
+
                   dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0)->dump();
                   Value *iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
                   Value *check_res = Builder.CreateICmp(loopGuardCmp->getPredicate(), iter_next, loopGuardCmp->getOperand(1));
