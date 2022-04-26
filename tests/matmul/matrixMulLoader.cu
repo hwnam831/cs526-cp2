@@ -323,7 +323,7 @@ int main(int argc, char **argv)
     checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
 
     // setup execution parameters
-    dim3 threads(16, 16);
+    dim3 threads(BLOCK_SIZE, 1);
     dim3 grid(WC / threads.x, HC / threads.y);
 
     int Width_A = WA;

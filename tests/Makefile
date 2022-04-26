@@ -38,14 +38,18 @@ NVCCLIBS = -L$(CUDAROOT)/lib64 -lcudart_static -ldl -lrt -lpthread -lcuda -L$(CU
 CLCFLAGS = -emit-llvm -c -target -nvptx64-nvidial-nvcl -Dcl_clang_storage_class_specifiers\
  -I$(LLVMROOT)/include -include $(LLVMROOT)/include/clc/clcfunc.h -include $(LLVMROOT)/include/clc/clc.h -fpack-struct=64 \
  -Xclang -mlink-bitcode-file -Xclang $(LLVMROOT)/lib/clc/nvptx64--nvidiacl.bc -Dcl_khr_fp64  \
- -Xclang -fdeclare-opencl-builtins -Xclang -disable-O0-optnone -cl-std=CL2.0 -O0
+ -Xclang -fdeclare-opencl-builtins -Xclang -disable-O0-optnone -cl-std=CL2.0 -O1
 DEBUGOPTS =  -verify -loop-simplify -licm -mem2reg -inline -adce -sccp 
 
-test: $(TARGET)Loader $(TARGET).ptx.s
-	./$(TARGET)Loader $(TARGET).ptx.s $(TARGET)
+test: $(TARGET)Loader $(TARGET).opt.ptx.s
+	./$(TARGET)Loader $(TARGET).opt.ptx.s $(TARGET)
+
+original: $(TARGET)Loader $(TARGET).nvvm.ptx.s
+	./$(TARGET)Loader $(TARGET).nvvm.ptx.s $(TARGET)
+
 
 optimize: $(TARGET).opt.ll
-debug: $(TARGET).debug.ll
+debug: $(TARGET).debug.ll $(TARGET).nvvm.ll
 
 all: 
 	$(call RUNFOREACH)
@@ -53,7 +57,7 @@ all:
 cleanAll:
 	$(call CLEANFOREACH)
 
-gpumemopt:
+gpumemopt: $(LEVEL)/gpumemopt/gpumemopt.cpp $(LEVEL)/gpumemopt/utils.h
 	cmake --build ../../build	
 
 %.ll: %.bc
@@ -65,13 +69,13 @@ $(TARGET)Loader: $(TARGET)Loader.cu
 %.nvvm.bc: %_kernel.cl
 	$(LLVMGCC) $< -o $@ $(CLCFLAGS)
 
-%.debug.bc: %.nvvm.bc
-	$(LLVMOPT) $(DEBUGOPTS) -o=$@ < $<
+%.debug.bc: %.nvvm.bc gpumemopt
+	$(LLVMOPT) -load $(OPTLIB) --gpumemopt -o=$@ < $<
 
-%.opt.bc: %.debug.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) --gpumemcoal -o=$@ < $<
+%.opt.bc: %.nvvm.bc gpumemopt
+	$(LLVMOPT) -load $(OPTLIB) --gpumemopt --gpumempref -o=$@ < $<
 
-%.ptx.s: %.nvvm.ll
+%.ptx.s: %.ll
 	$(LLC) -mcpu=sm_61 -march=nvptx64 $< -o $@
 
 clean:
