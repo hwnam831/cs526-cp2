@@ -29,5 +29,3 @@ __kernel void mv(__global float *A, __global float *B, __global float *C, int wi
 	}
 	C[idx] = sum;
 }
-
-

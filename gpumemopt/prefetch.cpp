@@ -258,6 +258,15 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
         continue;
       }
 
+      if (CallInst *CI = dyn_cast<CallInst>(SMemI->getNextNode())){
+        auto funcname = CI->getCalledFunction()->getName();
+        if(funcname != "llvm.nvvm.barrier0"){
+          continue;
+        }
+      } else {
+        errs() << "prefetching will not be benefitial.\n";
+        continue;
+      }
       errs() << "adding prefetch\n";
 
       if(GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)){
@@ -269,7 +278,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
           const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
           if(expr != nullptr){
             expr->dump();
-            //TODO: does not have to be constant?
+            
             const SCEVConstant *C;
             ConstantInt *CI;
             if (C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
@@ -298,41 +307,38 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
             Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), tempAllocaPtr);
             SMemI->setOperand(0, tempVal);
             
-            Builder.SetInsertPoint(SMemI->getNextNode()->getNextNode()); //TODO: check the next immediate barrier inst
+            Builder.SetInsertPoint(SMemI->getNextNode()->getNextNode());
             L->getHeader()->dump();
 
-            if(BranchInst *loopGuardBr = dyn_cast<BranchInst>(L->getHeader()->getTerminator())){ 
+            if(BranchInst *loopGuardBr = dyn_cast<BranchInst>(Backedge->getTerminator())){ 
               if(loopGuardBr->isConditional()){
                 loopGuardBr->dump();
                 loopGuardBr->getOperand(0)->dump();
-                if(ICmpInst *loopGuardCmp = dyn_cast<ICmpInst>(loopGuardBr->getOperand(0))){ //TODO: get operand 0 of the conditional br instead
+                if(ICmpInst *loopGuardCmp = dyn_cast<ICmpInst>(loopGuardBr->getOperand(0))){
                   loopGuardCmp->dump();
                   loopGuardCmp->getOperand(0)->dump();
-                  Value *iter_next = Builder.CreateAdd(loopGuardCmp->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+                  dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0)->dump();
+                  Value *iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
                   Value *check_res = Builder.CreateICmp(loopGuardCmp->getPredicate(), iter_next, loopGuardCmp->getOperand(1));
                   Instruction *ThenTerm , *ElseTerm;
                   SplitBlockAndInsertIfThenElse(check_res, (dyn_cast<ICmpInst>(check_res))->getNextNode(), &ThenTerm, &ElseTerm);
 
-                  Builder.SetInsertPoint(ThenTerm);
-                  LMemI->moveBefore(ThenTerm);
+                  Builder.SetInsertPoint(ElseTerm);
+                  LMemI->moveBefore(ElseTerm);
                   Builder.CreateStore(LMemI, tempAllocaPtr);
 
                 } else {
-                  errs() << "loop header terminator's previous instruction is not icmp\n";
+                  errs() << "loop header terminator's previous instruction is not icmp.\n";
                 }
               } else {
                 errs() << "loop header terminator inst is not a conditional br.\n";
-
-                Backedge->dump();
-                // for(BasicBlock *B: L->getBlocks())
-                //   B->dump();
               }
             } else {
               errs() << "loop header terminator inst is not br.\n";
             }
             
           } else {
-            errs() << ("finding nullptr\n");
+            errs() << "unsupported stride type.\n";
           }
         } else {
           continue;
@@ -341,9 +347,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
     }
   }
 
-  errs() <<  "Trip count for this loop is: " << SE->getSmallConstantTripCount(L);
   errs() << "\nend-------------------------------------\n";
-
   return Changed;
 }
 

@@ -70,11 +70,10 @@ $(TARGET)Loader: $(TARGET)Loader.cu
 	$(LLVMGCC) $< -o $@ $(CLCFLAGS)
 
 %.debug.bc: %.nvvm.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) -o=$@ < $<
+	$(LLVMOPT) -load $(OPTLIB) --gpumemopt -o=$@ < $<
 
 %.opt.bc: %.nvvm.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) --gpumempref < $< | \
-	$(LLVMOPT) -O2 -o=$@
+	$(LLVMOPT) -load $(OPTLIB) --gpumemopt --gpumempref -o=$@ < $<
 
 %.ptx.s: %.ll
 	$(LLC) -mcpu=sm_61 -march=nvptx64 $< -o $@
