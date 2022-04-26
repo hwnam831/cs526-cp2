@@ -48,6 +48,11 @@ original: $(TARGET)Loader $(TARGET).nvvm.ptx.s
 	./$(TARGET)Loader $(TARGET).nvvm.ptx.s $(TARGET)
 
 
+profile: $(TARGET)Loader $(TARGET).nvvm.ptx.s $(TARGET).coal.ptx.s $(TARGET).opt.ptx.s
+	nvprof ./$(TARGET)Loader $(TARGET).nvvm.ptx.s $(TARGET)
+	nvprof ./$(TARGET)Loader $(TARGET).coal.ptx.s $(TARGET)
+	nvprof ./$(TARGET)Loader $(TARGET).opt.ptx.s $(TARGET)
+
 optimize: $(TARGET).opt.ll
 debug: $(TARGET).debug.ll $(TARGET).nvvm.ll
 
@@ -57,7 +62,7 @@ all:
 cleanAll:
 	$(call CLEANFOREACH)
 
-gpumemopt: $(LEVEL)/gpumemopt/gpumemopt.cpp $(LEVEL)/gpumemopt/utils.h
+gpumemopt: $(LEVEL)/gpumemopt/gpumemopt.cpp $(LEVEL)/gpumemopt/utils.h $(LEVEL)/gpumemopt/prefetch.cpp
 	cmake --build ../../build	
 
 %.ll: %.bc
@@ -72,11 +77,14 @@ $(TARGET)Loader: $(TARGET)Loader.cu
 %.debug.bc: %.nvvm.bc gpumemopt
 	$(LLVMOPT) -load $(OPTLIB) --gpumemopt -o=$@ < $<
 
-%.opt.bc: %.nvvm.bc gpumemopt
-	$(LLVMOPT) -load $(OPTLIB) --gpumemopt --gpumempref -o=$@ < $<
+%.coal.bc: %.nvvm.bc gpumemopt
+	$(LLVMOPT) -load $(OPTLIB) --gpumemopt -o=$@ < $<
 
-%.ptx.s: %.ll
-	$(LLC) -mcpu=sm_61 -march=nvptx64 $< -o $@
+%.opt.bc: %.coal.bc gpumemopt
+	$(LLVMOPT) -load $(OPTLIB) --gpumempref -o=$@ < $<
+
+%.ptx.s: %.bc
+	$(LLVMOPT) -O2 $< | $(LLC) -mcpu=sm_61 -march=nvptx64 -o $@
 
 clean:
 	$(RM) -f $(TARGET)Loader *.bc *.ll *.ptx.s
