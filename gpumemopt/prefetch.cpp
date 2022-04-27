@@ -64,10 +64,12 @@ namespace {
 
   private:
     // Add fields and helper functions for this pass here.
+    LoopInfo *LI;
     ScalarEvolution *SE;
     PostDominatorTree *PDT;
     Loop *prefLoop;
     BasicBlock *prefBlock;
+    Instruction *prefIfInsertPt;
   };
 }
 
@@ -304,6 +306,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
         Inst->getParent()->dump();
       }
       
+      bool to_tile = false;
       if(L->contains(Inst)){
         errs() << "barrier is inside this loop!\n";
         prefLoop = L;
@@ -318,17 +321,31 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
             }
         }
         // process later in inner loop
-        if(is_tiled)
+        if(is_tiled){
+          if(GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)){
+            const SCEV *LSCEV = SE->getSCEVAtScope(gepi->getOperand(1), prefLoop);
+            LSCEV->dump();
+          }
           continue;
-      } else if(prefLoop->contains(Inst)){
+        }
+      } else if(prefLoop != nullptr && prefLoop->contains(Inst)){ // outerloop has prefetched access
         errs() << "barrier is inside prefLoop loop!\n";
-        if(L->getCanonicalInductionVariable() != nullptr){
-          L->getCanonicalInductionVariable()->dump();
-          L->getCanonicalInductionVariable()->getOperand(0)->dump();
-          L->getCanonicalInductionVariable()->getOperand(1)->dump();
+        to_tile = true;
+      } else if(prefLoop == nullptr){
+        for (Loop *I_loop : *LI){
+          for (Loop *L_loop : depth_first(I_loop)){
+            if(L_loop->contains(Inst)){
+              prefLoop = L_loop;
+              break;
+            }
+          }
+          if(prefLoop != nullptr)
+            break;
+        }
+        if(prefLoop == nullptr)
           continue;
-        } else continue;
-      } else {
+        to_tile = true;
+      } else{
         errs() << "not supported for prefetch.\n";
         continue;
       }
@@ -341,11 +358,17 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
       //   errs() << "prefetching will not be benefitial.\n";
       //   continue;
       // }
-
+      if(L->getCanonicalInductionVariable() != nullptr){
+        L->getCanonicalInductionVariable()->dump();
+        L->getCanonicalInductionVariable()->getOperand(0)->dump();
+        L->getCanonicalInductionVariable()->getOperand(1)->dump(); //TODO: check num of operands
+        // continue;
+      } else continue;
       errs() << "adding prefetch\n";
 
       if(GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)){
-        const SCEV *LSCEV = SE->getSCEVAtScope(gepi->getOperand(1), L);
+        prefLoop->dump();
+        const SCEV *LSCEV = SE->getSCEVAtScope(gepi->getOperand(1), prefLoop);
         LSCEV->dump();
         // SE->getSCEV(gepi->getOperand(1))->dump();
         const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
@@ -354,8 +377,11 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
           const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
           if(expr != nullptr){
             expr->dump();
-
-            if(BranchInst *loopGuardBr = dyn_cast<BranchInst>(Backedge->getTerminator())){ 
+            // TODO: assuming the prefLoop has prefetched access for now (will need to add condition check if not)
+            if(to_tile) {
+              
+              continue;
+            } else if(BranchInst *loopGuardBr = dyn_cast<BranchInst>(Backedge->getTerminator())){ 
               if(loopGuardBr->isConditional()){
                 if(ICmpInst *loopGuardCmp = dyn_cast<ICmpInst>(loopGuardBr->getOperand(0))){
                   const SCEVConstant *C;
@@ -394,6 +420,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                   Instruction *ThenTerm , *ElseTerm;
                   SplitBlockAndInsertIfThenElse(check_res, (dyn_cast<ICmpInst>(check_res))->getNextNode(), &ThenTerm, &ElseTerm);
 
+                  prefIfInsertPt = ElseTerm; // TODO: add check for if this already existed
                   Builder.SetInsertPoint(ElseTerm);
                   LMemI->moveBefore(ElseTerm);
                   Builder.CreateStore(LMemI, tempAllocaPtr);
@@ -425,7 +452,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
 bool GPUMemPrefetching::runOnFunction(Function &F) {
   errs() << "Start Prefetching.\n";
 
-  LoopInfo *LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+  LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
   PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
   bool Changed = false;
