@@ -38,7 +38,7 @@
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/InstrTypes.h"
 using namespace llvm;
 
@@ -57,6 +57,7 @@ namespace {
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesCFG();
       AU.addRequired<LoopInfoWrapperPass>();
+      AU.addRequired<PostDominatorTreeWrapperPass>();
       AU.addRequired<ScalarEvolutionWrapperPass>();
       AU.addPreserved<ScalarEvolutionWrapperPass>();
     }
@@ -64,6 +65,9 @@ namespace {
   private:
     // Add fields and helper functions for this pass here.
     ScalarEvolution *SE;
+    PostDominatorTree *PDT;
+    Loop *prefLoop;
+    BasicBlock *prefBlock;
   };
 }
 
@@ -231,7 +235,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
   //     }
   //   }
   // }
-  for (const auto BB : L->blocks()) {
+  for (auto BB : L->blocks()) {
     for (auto &I : *BB) {
       // only prefetch for loads from global memory that stores to shared memory
       StoreInst *SMemI;
@@ -261,20 +265,89 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
         continue;
       }
 
-      if (CallInst *CI = dyn_cast<CallInst>(SMemI->getNextNode())){
-        auto funcname = CI->getCalledFunction()->getName();
-        if(funcname != "llvm.nvvm.barrier0"){
-          continue;
+      Instruction *Inst = dyn_cast<Instruction>(&I);
+      BasicBlock *BBlock = BB;
+      bool found_barrier = false;
+      while(!found_barrier && BBlock->getTerminator()->getNumSuccessors() > 0){
+        while(Inst->getNextNode() != nullptr) {
+          Inst = Inst->getNextNode();
+          if (CallInst *CI = dyn_cast<CallInst>(Inst)){
+            auto funcname = CI->getCalledFunction()->getName();
+            if(funcname == "llvm.nvvm.barrier0"){
+              found_barrier = true;
+              break;
+            }
+          }
         }
+        if(found_barrier)
+          break;
+        bool found_child = false;
+        for (succ_iterator sit = succ_begin(BBlock), set = succ_end(BBlock); sit != set; ++sit){
+          BasicBlock *succ = *sit;
+          Inst = dyn_cast<Instruction>(succ->begin());
+          if(PDT->dominates(succ, BBlock)){
+            BBlock = succ;
+            found_child = true;
+            break;
+          }
+        }
+        if(!found_child){
+          break;
+        }
+      }
+      if(!found_barrier){
+        errs() << "not supported for prefetch.\n";
+        continue;
       } else {
-        errs() << "prefetching will not be benefitial.\n";
+        errs() << "found barrier inst!\n";
+        Inst->dump();
+        Inst->getParent()->dump();
+      }
+      
+      if(L->contains(Inst)){
+        errs() << "barrier is inside this loop!\n";
+        prefLoop = L;
+        prefBlock = Incoming;
+        bool is_tiled = false;
+        for (Loop *subLoop : L->getSubLoops()) {
+            // needs a temp array to prefetch
+            if (subLoop->contains(&I)){
+              errs() << "CONTAINED IN A SUBLOOP!\n"; 
+              is_tiled = true;
+              break;
+            }
+        }
+        // process later in inner loop
+        if(is_tiled)
+          continue;
+      } else if(prefLoop->contains(Inst)){
+        errs() << "barrier is inside prefLoop loop!\n";
+        if(L->getCanonicalInductionVariable() != nullptr){
+          L->getCanonicalInductionVariable()->dump();
+          L->getCanonicalInductionVariable()->getOperand(0)->dump();
+          L->getCanonicalInductionVariable()->getOperand(1)->dump();
+          continue;
+        } else continue;
+      } else {
+        errs() << "not supported for prefetch.\n";
         continue;
       }
+      // if (CallInst *CI = dyn_cast<CallInst>(SMemI->getNextNode())){
+      //   auto funcname = CI->getCalledFunction()->getName();
+      //   if(funcname != "llvm.nvvm.barrier0"){
+      //     continue;
+      //   }
+      // } else {
+      //   errs() << "prefetching will not be benefitial.\n";
+      //   continue;
+      // }
+
       errs() << "adding prefetch\n";
 
       if(GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)){
         const SCEV *LSCEV = SE->getSCEVAtScope(gepi->getOperand(1), L);
         LSCEV->dump();
+        // SE->getSCEV(gepi->getOperand(1))->dump();
         const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
         if(LSCEVAddRec != nullptr){
           errs() << "finding addresses\n";
@@ -313,7 +386,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                   Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), tempAllocaPtr);
                   SMemI->setOperand(0, tempVal);
                   
-                  Builder.SetInsertPoint(SMemI->getNextNode()->getNextNode());
+                  Builder.SetInsertPoint(Inst->getNextNode()); // insert after the barrier instruction
 
                   dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0)->dump();
                   Value *iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
@@ -354,7 +427,7 @@ bool GPUMemPrefetching::runOnFunction(Function &F) {
 
   LoopInfo *LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-
+  PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
   bool Changed = false;
   for (Loop *I : *LI)
     for (Loop *L : depth_first(I))
