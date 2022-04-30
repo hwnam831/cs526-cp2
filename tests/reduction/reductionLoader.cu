@@ -172,6 +172,7 @@ char *generatePTX(const char *ll, size_t size, const char *filename)
 void
 computeGold( float* input, const unsigned int len, float* result)
 {
+    /*
     for(int d = 1; d <= len/2; d *= 2)
     {
       for(int i = 0; i < len; i += 2*d)
@@ -179,6 +180,22 @@ computeGold( float* input, const unsigned int len, float* result)
             input[i] = input[i] + input[i + d];
             //printf("Gold: i:%d, i+d:%d\n", i, i+d);
       }
+    }
+    */
+    int curlen;
+    for(curlen = len; curlen > 32*TILE; curlen /= TILE)
+    {
+      for(int i = 0; i < curlen; i += TILE)
+      {
+        float sum = 0;
+        for (int j=0; j<TILE; j++){
+            sum += input[i + j];
+        }
+        input[i/TILE] = sum;
+      }
+    }
+    for (int k = 1; k<curlen; k++){
+        input[0] += input[k];
     }
     result[0] = input[0];
 }
@@ -316,28 +333,24 @@ int main(int argc, char **argv)
 
     // execute the kernel
     int flip = 0;
-    for (int i=1; i<num_elements; i*=2) {
-        dim3  grid(num_elements/i/2/256, 1, 1);
-        if (grid.x>1024) {
-            grid.y = grid.x/1024;
-            grid.x = 1024;
-        }
-        dim3  threads(256, 1, 1);
-        if (grid.x==0) {
-            grid.x = 1;
-            threads.x = num_elements/i/2;
-        }
-        int num = num_elements/i;
+    int num;
+    for (int i=1; i<=num_elements/TILE; i*=TILE) {
+        dim3  grid(num_elements/i/TILE/32, 1, 1);
+
+        dim3  threads(32, 1, 1);
+        num = num_elements/i;
         void *params[] = { flip?&d_A:&d_C, flip?&d_C:&d_A, &num };
         checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, grid.z, threads.x, threads.y, threads.z, 0, NULL, params, NULL)); 
         flip = 1-flip;
     }
     // Copy the result back to the host
-    checkCudaErrors(cuMemcpyDtoH(h_C, flip?d_C:d_A, sizeof(float)*1));
+    checkCudaErrors(cuMemcpyDtoH(h_C, flip?d_A:d_C, sizeof(float)*num));
 
     cudaDeviceSynchronize();
     fprintf(stderr, "CUDA kernel launched\n");
-
+    for(int i=1; i<num; i++){
+        h_C[0] += h_C[i];
+    }
     computeGold( h_A, num_elements, reference);
     bool res = cutCompareL2fe(reference, h_C, 1, 1e-6f);
     printf("Test %s \n", res ? "PASSED" : "FAILED");
