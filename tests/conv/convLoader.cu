@@ -178,7 +178,7 @@ computeGold(float* C, const float* A, const float* B, unsigned int hA, unsigned 
             double sum = 0;
             for (unsigned int j1 = 0; j1 < hB; ++j1) {
                 for (unsigned int i1 = 0; i1 < wB; ++i1) {
-                    sum += A[(j-j1+hB)*(wA+pwb)+i-i1+pwb] * B[j1*wB+i1];
+                    sum += A[(j+j1)*(wA+pwb)+i+i1] * B[j1*wB+i1];
                 }
             }
             C[j * wA + i] = (float)sum;
@@ -330,7 +330,7 @@ int main(int argc, char **argv)
     checkCudaErrors(cuMemcpyHtoD(d_B, h_B, mem_size_B));
 
     // setup execution parameters
-    dim3 threads(16, 16);
+    dim3 threads(32, 1);
     dim3 grid(WIDTH_INPUT / threads.x, HEIGHT_INPUT / threads.y);
 
     int Width_A = WIDTH_A;

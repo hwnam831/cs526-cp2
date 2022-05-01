@@ -54,7 +54,7 @@ profile: $(TARGET)Loader $(TARGET).unroll.ptx.s $(TARGET).coal.ptx.s $(TARGET).o
 	nvprof ./$(TARGET)Loader $(TARGET).opt.ptx.s $(TARGET)
 
 optimize: $(TARGET).opt.ll
-debug: $(TARGET).opt.ll $(TARGET).nvvm.ll $(TARGET).coal.ll
+debug: $(TARGET).nvvm.ll $(TARGET).coal.ll $(TARGET).opt.ll
 
 all: 
 	$(call RUNFOREACH)

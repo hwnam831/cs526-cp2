@@ -18,6 +18,7 @@ __kernel void conv(__global float *A, __global float *B, __global float *C, int 
 	int j;
 	float sum = 0;
 	for (j=0; j<h; j=j+1) {
+		#pragma unroll 2
 		for (i=0; i<w; i=i+1) {
 			float a;
 			float b;
