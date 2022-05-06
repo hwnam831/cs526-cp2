@@ -29,7 +29,7 @@ define CLEANFOREACH
     done
 endef
 
-.PRECIOUS: %.nvvm.ll
+.PRECIOUS: %.nvvm.ll %.coal.ll %.opt.ll
 
 ## Other choices: test or comparecfe (these will be provided later)
 default: test
@@ -84,7 +84,8 @@ $(TARGET)Loader: $(TARGET)Loader.cu
 	$(LLVMOPT) -load $(OPTLIB) --gpumempref -o=$@ < $<
 
 %.ptx.s: %.bc
-	$(LLVMOPT) -unroll-count=2 -O2 $< | $(LLC) -mcpu=sm_61 -march=nvptx64 -o $@
+	#$(LLVMOPT) -unroll-count=2 -O2 $< | $(LLC) -mcpu=sm_61 -march=nvptx64 -o $@
+	$(LLC) -mcpu=sm_61 -march=nvptx64 -o $@ $<
 
 clean:
 	$(RM) -f $(TARGET)Loader *.bc *.ll *.ptx.s

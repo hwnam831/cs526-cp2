@@ -50,7 +50,7 @@ namespace {
     // Entry point for the overall scalar-replacement pass
     bool runOnFunction(Function &F);
     bool runOnLoop(Loop *L);
-    const SCEVAddRecExpr *findAddRecExpr(const SCEVNAryExpr * expr);
+    const SCEVAddRecExpr *findAddRecExpr(const SCEV * expr);
     const SCEV *createInitialPrefAddr(const SCEV * expr);
     // getAnalysisUsage - List passes required by this pass.  We also know it
     // will not alter the CFG, so say so.
@@ -93,51 +93,91 @@ static RegisterPass<GPUMemPrefetching> X("gpumempref",
 
 // This function finds the AddRecExpr (start, +, step) in expr. 
 // TODO: this only finds one addrecexpr for now 
-const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEVNAryExpr * expr){
-  if(!isa<SCEVAddRecExpr>(expr)){
-    for (unsigned i = 0; i < expr->getNumOperands(); ++i){
-      
-      if(!SE->containsAddRecurrence(expr->getOperand(i))){
-        continue;
-      }
+const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEV * expr_o){
+  if (const SCEVNAryExpr *expr = dyn_cast<SCEVNAryExpr>(expr_o)){
+   if(!isa<SCEVAddRecExpr>(expr)){
+      for (unsigned i = 0; i < expr->getNumOperands(); ++i){
+        expr->dump();
+        if(!SE->containsAddRecurrence(expr->getOperand(i))){
+          continue;
+        }
+        errs() << "contains add recurrence!\n";
 
-      const SCEVNAryExpr * SCEVNAry_expr = dyn_cast<SCEVNAryExpr>(expr->getOperand(i));
-      const SCEVAddRecExpr * sub_expr = findAddRecExpr(SCEVNAry_expr);
-      if(sub_expr != nullptr)
-        return sub_expr;
+        const SCEVAddRecExpr * sub_expr = findAddRecExpr(expr->getOperand(i));
+        if(sub_expr != nullptr)
+          return sub_expr;
+
+      }
+      return nullptr;
+    } else {
+      const SCEVAddRecExpr *LSCEAddRec_expr = dyn_cast<SCEVAddRecExpr>(expr);
+      return LSCEAddRec_expr;
     }
-    return nullptr;
+  } else if(const SCEVCastExpr *expr= dyn_cast<SCEVCastExpr>(expr_o)){
+      for (unsigned i = 0; i < expr->getNumOperands(); ++i){
+        expr->dump();
+        if(!SE->containsAddRecurrence(expr->getOperand(i))){
+          continue;
+        }
+        errs() << "contains add recurrence!\n";
+
+        const SCEVAddRecExpr * sub_expr = findAddRecExpr(expr->getOperand(i));
+        if(sub_expr != nullptr)
+          return sub_expr;
+
+      }
+      return nullptr;
+  } else if(const SCEVUDivExpr *expr = dyn_cast<SCEVUDivExpr>(expr_o)){
+      for (unsigned i = 0; i < expr->getNumOperands(); ++i){
+        expr->dump();
+        if(!SE->containsAddRecurrence(expr->getOperand(i))){
+          continue;
+        }
+        errs() << "contains add recurrence!\n";
+
+        const SCEVAddRecExpr * sub_expr = findAddRecExpr(expr->getOperand(i));
+        if(sub_expr != nullptr)
+          return sub_expr;
+
+      }
+      return nullptr;
   } else {
-    const SCEVAddRecExpr *LSCEAddRec_expr = dyn_cast<SCEVAddRecExpr>(expr);
-    return LSCEAddRec_expr;
+    errs() << "cast result is null!\n";
+    return nullptr;
   }
 }
 
 // Create a new SCEV by replacing all AddRecExpr with all its initial value in the loop
 const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
+  expr->dump();
+  errs() << "type is: " << expr->getSCEVType() << "\n";
   if(!isa<SCEVAddRecExpr>(expr)){
     switch (expr->getSCEVType()) {
       case scConstant:
         return expr;
       case scPtrToInt: 
-        if(SE->containsAddRecurrence(expr))
-          return SE->getPtrToIntExpr(createInitialPrefAddr(expr), expr->getType());
-        else
+        if(SE->containsAddRecurrence(expr)){
+          const SCEVCastExpr *SCEVCast_expr = dyn_cast<SCEVCastExpr>(expr);
+          return SE->getPtrToIntExpr(createInitialPrefAddr(SCEVCast_expr->getOperand(0)), expr->getType());
+        } else
           return SE->getPtrToIntExpr(expr, expr->getType());
       case scTruncate:
-        if(SE->containsAddRecurrence(expr))
-          return SE->getTruncateExpr(createInitialPrefAddr(expr), expr->getType());
-        else
+        if(SE->containsAddRecurrence(expr)){
+          const SCEVCastExpr *SCEVCast_expr = dyn_cast<SCEVCastExpr>(expr);
+          return SE->getTruncateExpr(createInitialPrefAddr(SCEVCast_expr->getOperand(0)), expr->getType());
+        } else
           return SE->getTruncateExpr(expr, expr->getType());
       case scZeroExtend:
-        if(SE->containsAddRecurrence(expr))
-          return SE->getZeroExtendExpr(createInitialPrefAddr(expr), expr->getType());
-        else
+        if(SE->containsAddRecurrence(expr)){
+          const SCEVCastExpr *SCEVCast_expr = dyn_cast<SCEVCastExpr>(expr);
+          return SE->getZeroExtendExpr(createInitialPrefAddr(SCEVCast_expr->getOperand(0)), expr->getType());
+        } else
           return SE->getZeroExtendExpr(expr, expr->getType());
       case scSignExtend:
-        if(SE->containsAddRecurrence(expr))
-          return SE->getSignExtendExpr(createInitialPrefAddr(expr), expr->getType());
-        else
+        if(SE->containsAddRecurrence(expr)){
+          const SCEVCastExpr *SCEVCast_expr = dyn_cast<SCEVCastExpr>(expr);
+          return SE->getSignExtendExpr(createInitialPrefAddr(SCEVCast_expr->getOperand(0)), expr->getType());
+        } else
           return SE->getSignExtendExpr(expr, expr->getType());
       // case scAddRecExpr:
       case scMulExpr: {
@@ -195,8 +235,10 @@ const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
       case scUnknown:
         return expr;
       case scCouldNotCompute:
-      default:
+      default:{
         llvm_unreachable("Attempt to use a SCEVCouldNotCompute object!");
+        return nullptr;
+      }
     }
   } else {
     const SCEVAddRecExpr *LSCEAddRec_expr = dyn_cast<SCEVAddRecExpr>(expr);
@@ -381,9 +423,12 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
           errs() << "finding addresses\n";
           const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
           if(expr != nullptr){
+            errs() << "expr is: ";
             expr->dump();
             // TODO: assuming the prefLoop has prefetched access for now (will need to add condition check if not)
             if(to_tile) {
+              errs() << "!!! to tile 2D prefetch\n";
+              // break;
               const SCEV *LSCEV_inner = SE->getSCEVAtScope(gepi->getOperand(1), L);
               LSCEV_inner->dump();
               const SCEV *initLSCEV = LSCEV_inner;
@@ -515,7 +560,12 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                       CI = ConstantInt::get(SE->getContext(), C->getAPInt());
                       IRBuilder<> Builder(gepi);
                       gepi->getOperand(1)->dump();
-                      Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI);
+                      gepi->getOperand(1)->getType()->dump();
+                      CI->getType()->dump();
+                      Value *CI_exd = Builder.CreateZExt(CI, gepi->getOperand(1)->getType()); //TODO: check int type
+                      errs() << "HERE!\n";
+                      Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI_exd);
+                      errs() << "HERE!\n";
                       gepi->setOperand(1, prefAddr);
                   } else continue;
                   Changed = true;
