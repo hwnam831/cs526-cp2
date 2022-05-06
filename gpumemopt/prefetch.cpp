@@ -58,6 +58,7 @@ namespace {
       AU.setPreservesCFG();
       AU.addRequired<LoopInfoWrapperPass>();
       AU.addRequired<PostDominatorTreeWrapperPass>();
+      AU.addRequired<DominatorTreeWrapperPass>();
       AU.addRequired<ScalarEvolutionWrapperPass>();
       AU.addPreserved<ScalarEvolutionWrapperPass>();
     }
@@ -67,6 +68,7 @@ namespace {
     LoopInfo *LI;
     ScalarEvolution *SE;
     PostDominatorTree *PDT;
+    DominatorTree *DT;
     Loop *prefLoop;
     BasicBlock *prefBlock;
     Instruction *prefIfInsertPt;
@@ -206,7 +208,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
   L->dump();
   bool Changed = false;
 
-  //TODO: find immediate dominator?
+  //TODO: find immediate dominator of loop header?
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
   if (!L->getIncomingAndBackEdge(Incoming, Backedge)){
     errs() << "unsupported loop form.\n";
@@ -358,19 +360,21 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
       //   errs() << "prefetching will not be benefitial.\n";
       //   continue;
       // }
-      if(L->getCanonicalInductionVariable() != nullptr){
-        L->getCanonicalInductionVariable()->dump();
-        L->getCanonicalInductionVariable()->getOperand(0)->dump();
-        L->getCanonicalInductionVariable()->getOperand(1)->dump(); //TODO: check num of operands
+      PHINode *IV = L->getCanonicalInductionVariable();
+      if(IV != nullptr){
+        IV->dump();
+        IV->getOperand(0)->dump();
+        IV->getOperand(1)->dump(); //TODO: check num of operands
         // continue;
-      } else continue;
+      } else if(to_tile) continue;
       errs() << "adding prefetch\n";
 
       if(GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)){
         prefLoop->dump();
         const SCEV *LSCEV = SE->getSCEVAtScope(gepi->getOperand(1), prefLoop);
         LSCEV->dump();
-        // SE->getSCEV(gepi->getOperand(1))->dump();
+        SE->getSCEV(gepi->getOperand(1))->dump();
+        SE->getSCEVAtScope(gepi->getOperand(1), L)->dump();
         const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
         if(LSCEVAddRec != nullptr){
           errs() << "finding addresses\n";
@@ -379,8 +383,116 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
             expr->dump();
             // TODO: assuming the prefLoop has prefetched access for now (will need to add condition check if not)
             if(to_tile) {
-              
-              continue;
+              const SCEV *LSCEV_inner = SE->getSCEVAtScope(gepi->getOperand(1), L);
+              LSCEV_inner->dump();
+              const SCEV *initLSCEV = LSCEV_inner;
+              //TODO: this while loop should not be needed here, just to be safe
+              while(SE->containsAddRecurrence(initLSCEV))
+                initLSCEV = createInitialPrefAddr(initLSCEV);
+
+              errs() << "inner initLSCEV: ";
+              initLSCEV->dump();
+              errs() << "========";
+              LSCEV_inner->dump();
+              const SCEV *LSCEV_inner_test = SE->getSCEVAtScope(gepi->getOperand(1), prefLoop);
+              LSCEV_inner_test->dump();
+              const SCEVNAryExpr  *LSCEVAddRec_inner = dyn_cast<SCEVNAryExpr>(LSCEV_inner);
+              if(LSCEVAddRec != nullptr){
+                const SCEVAddRecExpr *expr_inner = findAddRecExpr(LSCEVAddRec_inner);
+                if(expr_inner != nullptr){
+                  const SCEVConstant *C, *C_inner;
+                  ConstantInt *CI, *CI_inner;
+                  if (C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
+                    if (C_inner = dyn_cast<SCEVConstant>(expr_inner->getStepRecurrence(*SE))) {                      
+                      CI = ConstantInt::get(SE->getContext(), C->getAPInt());
+                      CI_inner = ConstantInt::get(SE->getContext(), C_inner->getAPInt());
+                      CI->dump();
+                      CI_inner->dump();
+                    } else continue;
+                  } else continue;
+                  prefIfInsertPt->dump();
+                  BasicBlock *prefIfInsertB = prefIfInsertPt->getParent();
+                  prefIfInsertB->dump();
+                  BasicBlock *loopBody = SplitBlock(prefIfInsertB, prefIfInsertPt, DT, NULL, NULL, "", false);
+                  IRBuilder<> Builder(prefIfInsertPt);
+                  PHINode *NPN = Builder.CreatePHI(CI->getType(), 2);
+                  NPN->addIncoming(ConstantInt::get(CI->getType(), dyn_cast<ConstantInt>(IV->getOperand(0))->getSExtValue()), prefIfInsertB);
+                  ConstantInt *CI_one = ConstantInt::get(CI->getType(), 1);
+                  Value *prefAddrInc = Builder.CreateMul(NPN, CI_inner);
+                  errs() << ("?????????????\n");
+                  IV->getType()->dump();
+                  CI->getType()->dump();
+                  PHINode *prefIV = prefLoop->getInductionVariable(*SE);
+                  Value *IV_exd = Builder.CreateZExt(prefIV, CI->getType());
+                  Value *prefAddrInc2 = Builder.CreateAdd(prefAddrInc, CI);
+                  Value *prefAddrInc3 = Builder.CreateMul(IV_exd, CI); // TODO: use SE->getAddExpr
+
+                  
+
+
+                  Value *prefAddrInc4 = Builder.CreateAdd(prefAddrInc2, IV_exd); // TODO: add phinode for a new induction variable
+
+                  Instruction *brTerminator = dyn_cast<Instruction>(prefBlock->getTerminator());
+                  SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
+                  Value *PrefPtrValue = SCEVE.expandCodeFor(initLSCEV, gepi->getOperand(1)->getType(), brTerminator);
+                  PrefPtrValue->dump();
+                  Value *prefAddr = Builder.CreateAdd(PrefPtrValue, prefAddrInc4); // TODO: not right?
+
+                  
+                  gepi->moveBefore(prefIfInsertPt);
+                  gepi->setOperand(1, prefAddr);
+                  LMemI->moveBefore(prefIfInsertPt);
+                  //TODO: prefBlock may be nullptr
+                  
+                  BasicBlock *initLoopBody = SplitBlock(prefBlock, brTerminator, DT, NULL, NULL, "", false);
+                  Builder.SetInsertPoint(brTerminator);
+
+                  PHINode *NPN_init = Builder.CreatePHI(CI->getType(), 2);
+                  NPN_init->addIncoming(ConstantInt::get(CI->getType(), dyn_cast<ConstantInt>(IV->getOperand(0))->getSExtValue()), prefBlock);
+                  Value *tempAllocaPtr = Builder.CreateAlloca(ArrayType::get(gepi->getOperand(0)->getType()->getPointerElementType(), CI->getSExtValue()));
+                  tempAllocaPtr->dump();
+
+                  Value *prefAddrInc_init = Builder.CreateMul(NPN_init, CI_inner);
+                  // Value *prefAddrInc2_init = Builder.CreateAdd(prefAddrInc_init, CI);
+                  Value *prefAddr_init = Builder.CreateAdd(PrefPtrValue, prefAddrInc_init);
+                  Value *initPrefAddr = Builder.CreateGEP(gepi->getOperand(0)->getType()->getPointerElementType(), gepi->getOperand(0), prefAddr_init);
+                  Value *initPrefVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), initPrefAddr);
+                  Value *tempGEP_init = Builder.CreateGEP(tempAllocaPtr, {ConstantInt::get(NPN_init->getType(),0), NPN_init});
+                  Builder.CreateStore(initPrefVal, tempGEP_init);
+
+                  Value *NPN_it_init = Builder.CreateAdd(NPN_init, CI_one);
+                  Value *icmp_init = Builder.CreateICmpEQ(NPN_it_init, CI);
+                  brTerminator->dump();
+                  Builder.CreateCondBr(icmp_init, dyn_cast<BasicBlock>(brTerminator->getOperand(0)), initLoopBody);
+                  NPN_init->addIncoming(NPN_it_init, initLoopBody);
+                  brTerminator->eraseFromParent();
+
+                  initLoopBody->dump();
+                  prefBlock->dump();
+
+                  Builder.SetInsertPoint(prefIfInsertPt);
+                  Value *tempGEP = Builder.CreateGEP(tempAllocaPtr, {ConstantInt::get(NPN->getType(),0), NPN});
+                  // Value *tempGEP = Builder.CreateGEP(tempAllocaPtr, {ConstantInt::get(NPN->getType(),0), ConstantInt::get(NPN->getType(), 1)}); //1-31
+                  tempGEP->dump();
+                  Builder.CreateStore(LMemI, tempGEP);
+                  Value *NPN_it = Builder.CreateAdd(NPN, CI_one);
+                  Value *icmp = Builder.CreateICmpEQ(NPN_it, CI);
+                  Builder.CreateCondBr(icmp, dyn_cast<BasicBlock>(prefIfInsertPt->getOperand(0)), loopBody);
+                  NPN->addIncoming(NPN_it, loopBody);
+                  prefIfInsertPt->eraseFromParent();
+
+                  Builder.SetInsertPoint(SMemI);
+                  Value *tempGEP2 = Builder.CreateGEP(tempAllocaPtr, {ConstantInt::get(NPN->getType(),0), IV});
+                  // Value *IV_sexd = Builder.CreateZExt(IV, NPN->getType());
+                  // Value *tempGEP2 = Builder.CreateGEP(tempAllocaPtr, {ConstantInt::get(NPN->getType(),0), ConstantInt::get(NPN->getType(), 1)}); // not 1
+                  Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), tempGEP2);
+                  SMemI->setOperand(0, tempVal);
+
+                  BB->dump();
+                  loopBody->dump();
+                } else continue;
+              } else continue;
+
             } else if(BranchInst *loopGuardBr = dyn_cast<BranchInst>(Backedge->getTerminator())){ 
               if(loopGuardBr->isConditional()){
                 if(ICmpInst *loopGuardCmp = dyn_cast<ICmpInst>(loopGuardBr->getOperand(0))){
@@ -455,6 +567,7 @@ bool GPUMemPrefetching::runOnFunction(Function &F) {
   LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
   SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
   PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
+  DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   bool Changed = false;
   for (Loop *I : *LI)
     for (Loop *L : depth_first(I))
