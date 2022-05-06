@@ -97,16 +97,13 @@ const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEV * expr_o){
   if (const SCEVNAryExpr *expr = dyn_cast<SCEVNAryExpr>(expr_o)){
    if(!isa<SCEVAddRecExpr>(expr)){
       for (unsigned i = 0; i < expr->getNumOperands(); ++i){
-        expr->dump();
         if(!SE->containsAddRecurrence(expr->getOperand(i))){
           continue;
         }
-        errs() << "contains add recurrence!\n";
 
         const SCEVAddRecExpr * sub_expr = findAddRecExpr(expr->getOperand(i));
         if(sub_expr != nullptr)
           return sub_expr;
-
       }
       return nullptr;
     } else {
@@ -115,25 +112,20 @@ const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEV * expr_o){
     }
   } else if(const SCEVCastExpr *expr= dyn_cast<SCEVCastExpr>(expr_o)){
       for (unsigned i = 0; i < expr->getNumOperands(); ++i){
-        expr->dump();
         if(!SE->containsAddRecurrence(expr->getOperand(i))){
           continue;
         }
-        errs() << "contains add recurrence!\n";
 
         const SCEVAddRecExpr * sub_expr = findAddRecExpr(expr->getOperand(i));
         if(sub_expr != nullptr)
           return sub_expr;
-
       }
       return nullptr;
   } else if(const SCEVUDivExpr *expr = dyn_cast<SCEVUDivExpr>(expr_o)){
       for (unsigned i = 0; i < expr->getNumOperands(); ++i){
-        expr->dump();
         if(!SE->containsAddRecurrence(expr->getOperand(i))){
           continue;
         }
-        errs() << "contains add recurrence!\n";
 
         const SCEVAddRecExpr * sub_expr = findAddRecExpr(expr->getOperand(i));
         if(sub_expr != nullptr)
@@ -142,15 +134,12 @@ const SCEVAddRecExpr *GPUMemPrefetching::findAddRecExpr(const SCEV * expr_o){
       }
       return nullptr;
   } else {
-    errs() << "cast result is null!\n";
     return nullptr;
   }
 }
 
 // Create a new SCEV by replacing all AddRecExpr with all its initial value in the loop
 const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
-  expr->dump();
-  errs() << "type is: " << expr->getSCEVType() << "\n";
   if(!isa<SCEVAddRecExpr>(expr)){
     switch (expr->getSCEVType()) {
       case scConstant:
@@ -242,7 +231,23 @@ const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
     }
   } else {
     const SCEVAddRecExpr *LSCEAddRec_expr = dyn_cast<SCEVAddRecExpr>(expr);
-    return LSCEAddRec_expr->getStart();
+    expr->dump();
+    LSCEAddRec_expr->getLoop()->dump();
+    prefLoop->dump();
+    const Loop * expr_loop = LSCEAddRec_expr->getLoop();
+    if(prefLoop == expr_loop){ // TODO: check others
+      errs() << "they are equal\n";
+      return LSCEAddRec_expr->getStart();
+    } else {
+      for (Loop *subLoop : prefLoop->getSubLoops()) {
+        if(subLoop == expr_loop){
+          errs() << "is subloop of prefLoop\n";
+          return LSCEAddRec_expr->getStart();
+        }
+      }
+      errs() << "they are not equal\n";
+      return LSCEAddRec_expr;
+    }
   }
 }
 
@@ -563,9 +568,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                       gepi->getOperand(1)->getType()->dump();
                       CI->getType()->dump();
                       Value *CI_exd = Builder.CreateZExt(CI, gepi->getOperand(1)->getType()); //TODO: check int type
-                      errs() << "HERE!\n";
                       Value *prefAddr = Builder.CreateAdd(gepi->getOperand(1), CI_exd);
-                      errs() << "HERE!\n";
                       gepi->setOperand(1, prefAddr);
                   } else continue;
                   Changed = true;

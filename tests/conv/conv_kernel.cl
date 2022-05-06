@@ -29,5 +29,80 @@ __kernel void conv(__global float *A, __global float *B, __global float *C, int 
 	C(idy, idx) = sum;
 }
 
+// __kernel void conv(__global float * A, __global float * B, __global float * C, int width, int height, int w, int h)
+// {
+// 	__local float shared_B[32];
+// 	__local float shared_A[64];
+// 	int i;
+// 	int j;
+// 	float sum = 0;
+// 	for (j=0; j<h; j=(j+1))
+// 	{
+// 		for (i=0; i<w; i=(i+32))
+// 		{
+// 			shared_A[(tidx+0)]=A(idy+j, idx+i);
+// 			shared_A[(tidx+32)]=A(idy+j, idx+i+32);			
+
+// 			int it_2;
+// 			shared_B[(tidx+0)]=B(j, ((i+0)+tidx));
+// 			barrier(CLK_LOCAL_MEM_FENCE);
+			
+// 			for (it_2=0; it_2<32; it_2=(it_2+1))
+// 			{
+// 				float a;
+// 				float b;
+// 				a=shared_A[tidx+it_2];
+// 				b=shared_B[it_2];
+// 				sum+=(a*b);
+// 			}
+// 			barrier(CLK_LOCAL_MEM_FENCE);
+// 		}
+// 	}
+// 	{
+// 		C(idy, idx)=sum;
+// 	}
+// }
+
+// __kernel void conv(__global float * A, __global float * B, __global float * C, int width, int height, int w, int h)
+// {
+// 	__local float shared_B[32];
+// 	__local float shared_A[64];
+// 	int i;
+// 	int j;
+// 	float sum = 0;
+// 	for (j=0; j<h; j=(j+1))
+// 	{
+// 		float temp_B = B(j, ((0+0)+tidx));
+// 		float temp_A1 = A(idy+j, idx+0);
+// 		float temp_A2 = A(idy+j, idx+0+32);
+// 		for (i=0; i<w; i=(i+32))
+// 		{
+// 			shared_A[(tidx+0)]=temp_A1;
+// 			shared_A[(tidx+32)]=temp_A2;			
+
+// 			int it_2;
+// 			shared_B[(tidx+0)]=temp_B;
+// 			barrier(CLK_LOCAL_MEM_FENCE);
+// 			if(i + 32 < w){
+// 				temp_B = B(j, ((i+0)+tidx + 32));
+// 				temp_A1 = A(idy+j, idx+i + 32);
+// 				temp_A2 = A(idy+j, idx+i+32 + 32);
+// 			}
+			
+// 			for (it_2=0; it_2<32; it_2=(it_2+1))
+// 			{
+// 				float a;
+// 				float b;
+// 				a=shared_A[tidx+it_2];
+// 				b=shared_B[it_2];
+// 				sum+=(a*b);
+// 			}
+// 			barrier(CLK_LOCAL_MEM_FENCE);
+// 		}
+// 	}
+// 	{
+// 		C(idy, idx)=sum;
+// 	}
+// }
 
 

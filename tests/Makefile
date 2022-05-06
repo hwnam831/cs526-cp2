@@ -29,7 +29,7 @@ define CLEANFOREACH
     done
 endef
 
-.PRECIOUS: %.nvvm.ll %.coal.ll %.opt.ll
+.PRECIOUS: %.nvvm.ll %.coal.ll %.opt.ll conv.coal.bc
 
 ## Other choices: test or comparecfe (these will be provided later)
 default: test
