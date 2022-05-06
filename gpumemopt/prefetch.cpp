@@ -71,6 +71,7 @@ namespace {
     DominatorTree *DT;
     Loop *prefLoop;
     BasicBlock *prefBlock;
+    BasicBlock *prefBackBlock;
     Instruction *prefIfInsertPt;
     ICmpInst *prefLoopGuardCmp; // TODO: may not exist
   };
@@ -361,6 +362,11 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
         errs() << "barrier is inside this loop!\n";
         prefLoop = L;
         prefBlock = Incoming;
+        prefBackBlock = Backedge;
+        if(Backedge == nullptr){
+          errs() << "Backedge is null!\n";
+        }
+
         bool is_tiled = false;
         for (Loop *subLoop : L->getSubLoops()) {
             // needs a temp array to prefetch
@@ -426,7 +432,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
         const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
         if(LSCEVAddRec != nullptr){
           errs() << "finding addresses\n";
-          const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec);
+          const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec); //TODO: add check for loops 
           if(expr != nullptr){
             errs() << "expr is: ";
             expr->dump();
@@ -461,6 +467,44 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                       CI_inner->dump();
                     } else continue;
                   } else continue;
+
+                  BranchInst *loopGuardBr;
+                  if(prefIfInsertPt == nullptr){
+                    errs() << "1\n";
+                    if(prefBackBlock == nullptr){
+                      errs() << "prefBackBlock is null!\n";
+                    }
+                    if(loopGuardBr = dyn_cast<BranchInst>(prefBackBlock->getTerminator())){ 
+errs() << "1\n";
+                      if(loopGuardBr->isConditional()){
+errs() << "1\n";
+                        if(ICmpInst *loopGuardCmp = dyn_cast<ICmpInst>(loopGuardBr->getOperand(0))){
+                          prefLoopGuardCmp = loopGuardCmp;
+errs() << "1\n";
+                          IRBuilder<> Builder(Inst->getNextNode()); // insert after the barrier instruction
+errs() << "1\n";
+                          dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0)->dump();
+errs() << "2\n";
+                          Value *iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+                          Value *check_res = Builder.CreateICmp(loopGuardCmp->getPredicate(), iter_next, loopGuardCmp->getOperand(1));
+                          Instruction *ThenTerm , *ElseTerm;
+                          SplitBlockAndInsertIfThenElse(check_res, (dyn_cast<ICmpInst>(check_res))->getNextNode(), &ThenTerm, &ElseTerm);
+
+                          prefIfInsertPt = ElseTerm;
+                        } else {
+                          errs() << "loop backedge block terminator's first operand is not icmp.\n";
+                          break;
+                        }
+                      } else {
+                        errs() << "loop backedge block terminator inst is not a conditional br.\n";
+                        break;
+                      }
+                    } else {
+                      errs() << "loop backedge block terminator inst is not br.\n";
+                    }
+                  } else {
+                    errs() << "prefIfInsertPt is not null\n";
+                  }
                   prefIfInsertPt->dump();
                   BasicBlock *prefIfInsertB = prefIfInsertPt->getParent();
                   prefIfInsertB->dump();
@@ -474,10 +518,28 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                   IV->getType()->dump();
                   CI->getType()->dump();
                   PHINode *prefIV = prefLoop->getInductionVariable(*SE);
+                  errs() << ("?????????????\n");
                   Value *prefAddrInc2 = Builder.CreateAdd(prefAddrInc, CI); // get next iteration by adding 1 step
-
+errs() << ("?????????????\n");
                   // create a new IV
+                  if(prefIV == nullptr) {
+                    errs() << "prefIV is null!\n";
+                    prefLoopGuardCmp->dump();
+                    prefLoopGuardCmp->getOperand(0)->dump();
+                    Instruction *prefIV_icmp = dyn_cast<Instruction>(prefLoopGuardCmp->getOperand(0));
+                    for (User *U: prefIV_icmp->users()){
+                      U->dump();
+                      if(Instruction *I = dyn_cast<Instruction>(U)){
+                        if(I->getOpcode()==Instruction::PHI){
+                          errs() << "here!\n";
+                          I->dump();
+                          prefIV = dyn_cast<PHINode>(I);
+                        }
+                      }
+                    }
+                  }
                   Builder.SetInsertPoint(prefIV->getNextNode());
+                  errs() << ("?????????????\n");
                   ConstantInt *CI_zero = ConstantInt::get(CI->getType(), 0);
                   PHINode *NewIV = Builder.CreatePHI(CI->getType(), 2);
                   NewIV->addIncoming(CI_zero, prefIV->getIncomingBlock(0));
