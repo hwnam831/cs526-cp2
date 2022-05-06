@@ -18,6 +18,7 @@ __kernel void reduction(__global float* d_odata, __global float* d_idata, int nu
 {
 	int i;
 	float sum = 0.0;
+	#pragma unroll 2
 	for (i=0; i<TILE; i++){
 		sum += d_idata[idx*TILE+i];
 	}

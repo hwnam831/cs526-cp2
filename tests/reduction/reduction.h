@@ -1,7 +1,9 @@
 #ifndef _REDUCTION_H_
 #define _REDUCTION_H_
 
-#define INPUT_SIZE (1048576*4)
+#define TILE 128
+#define INPUT_SIZE (TILE*TILE*TILE*32)
+
 
 #endif // _REDUCTION_H_
 

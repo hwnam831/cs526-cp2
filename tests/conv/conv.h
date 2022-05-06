@@ -5,8 +5,8 @@
 
 #define WIDTH_PADDING 32
 
-#define WIDTH_INPUT 	4096
-#define HEIGHT_INPUT 	4096
+#define WIDTH_INPUT 	1024
+#define HEIGHT_INPUT 	1024
 
 #define WIDTH_B		32
 #define HEIGHT_B	32

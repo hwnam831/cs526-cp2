@@ -99,7 +99,6 @@ bool FindNoncoalesced(BasicBlock* B, ValueMap<Value*, int>& TIDincr,
     if (CAST(GetElementPtrInst, GEPI, &inst)){
       if(GEPI->getAddressSpace() == 1 &&
         GEPI->getNumIndices() == 1){
-        GEPI->dump();
         auto IDX = GEPI->idx_begin()->get();
 
         int ivinc = IVincr.count(IDX) ? IVincr[IDX] : 0;
@@ -252,18 +251,16 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
   }
 
   LoopInfo& loops = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-
-  for (auto loop : loops){
+  for (auto I : loops){
+  for (auto loop : depth_first(I)){
     ValueMap<Value*, int> IVincr;
     std::vector<GetElementPtrInst*> Noncoalesced;
     ValueMap<GetElementPtrInst*, Value*> Baseaddr;
     auto IV = loop->getCanonicalInductionVariable();
-    //IV->dump();
-    
-    //loop->addChildLoop
 
     //Zero marks that this is the exact IV
     IVincr.insert(std::make_pair(IV, 0));
+
     //errs() << "Found induction variable\n";
     AnalyzeIncrement(IV, IVincr, 1);
     BasicBlock *B = IV->getParent();
@@ -288,7 +285,8 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
         int tidinc = TIDincr.count(IDX) ? TIDincr[IDX] : 0;
         Value* sharedAddr;
         Value* sharedIdx;
-        errs() << GEPI->getType() << "\n";
+        GEPI->dump();
+        errs() << "IVIncr : " << ivinc << "\tTIDincr: " << tidinc <<"\n";
         if (ivinc == 1 && tidinc == 0){
           auto shrtype = ArrayType::get(GEPI->getResultElementType(), TILEDIM);
           GlobalVariable* shr = new GlobalVariable(*F.getParent(),shrtype, false,
@@ -300,20 +298,19 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
           auto baddr = Baseaddr[GEPI];
           //Insert before the barrier
           headerbuilder.SetInsertPoint(outerhead->getTerminator()->getPrevNode());
-          Value* i16_base;
-          if (baddr->getType() != IV->getType()){
-            i16_base = headerbuilder.CreateAdd(baddr, 
-              headerbuilder.CreateZExt(IV,baddr->getType()));
-          } else {
-            i16_base = headerbuilder.CreateAdd(baddr, IV);
+          
+          Value* offset = headerbuilder.CreateAdd(TIDX, IV);
+          if (baddr->getType() != offset->getType()){
+            offset = headerbuilder.CreateZExt(offset,baddr->getType());
           }
-          Value* Ntidx = TIDX;
-          if (i16_base->getType() != TIDX->getType()){
-            Ntidx = headerbuilder.CreateZExt(TIDX,i16_base->getType());
-          }
-          Value* nidx = headerbuilder.CreateAdd(i16_base, Ntidx);
+          Value* nidx = headerbuilder.CreateAdd(baddr, offset);
+          
           auto globalptr = headerbuilder.CreateGEP(GEPI->getPointerOperand(), nidx);
           auto globalval = headerbuilder.CreateLoad(globalptr);
+          Value* Ntidx = TIDX;
+          if (baddr->getType() != Ntidx->getType()){
+            Ntidx = headerbuilder.CreateZExt(TIDX,baddr->getType());
+          }
           auto shrptr = headerbuilder.CreateGEP(shr, {ConstantInt::get(baddr->getType(),0), Ntidx});
           headerbuilder.CreateStore(globalval, shrptr);
 
@@ -340,7 +337,7 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
           if (!gepialive)
             GEPI->eraseFromParent();
           
-        } else if (ivinc==1 && tidinc > 0){
+        } else if (ivinc==1 && tidinc > 8){
           //create loop and reverse iv/tid
           auto shrtype = ArrayType::get(GEPI->getResultElementType(), TILEDIM*TILEDIM);
           GlobalVariable* shr = new GlobalVariable(*F.getParent(),shrtype, false,
@@ -414,8 +411,67 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
           ReplaceInstWithInst(loadloop->getTerminator(), newbranch);
           LIV->addIncoming(ConstantInt::get(IV->getType(), 0), loadloop->getPrevNode());
           LIV->addIncoming(increment, loadloop);
-        } else if (ivinc > 0 && ivinc <= 8 && tidinc == 0){
-          //should we count this case?
+        } else if (ivinc ==1 && tidinc <= 8 && tidinc > 0){
+          auto shrtype = ArrayType::get(GEPI->getResultElementType(), (ivinc+tidinc)*TILEDIM);
+          GlobalVariable* shr = new GlobalVariable(*F.getParent(),shrtype, false,
+            GlobalValue::LinkageTypes::InternalLinkage, UndefValue::get(shrtype),
+            "shared_" + GEPI->getPointerOperand()->getName().str(), nullptr, 
+            GlobalValue::NotThreadLocal, 3);
+          shr->setAlignment(MaybeAlign(4));
+          IRBuilder<> headerbuilder(outerhead);
+          auto baddr = Baseaddr[GEPI];
+          //Insert before the barrier
+          headerbuilder.SetInsertPoint(outerhead->getTerminator()->getPrevNode());
+
+          //Unrolled loads
+          Value* offset = headerbuilder.CreateAdd(TIDX, IV);
+          if (baddr->getType() != offset->getType()){
+            offset = headerbuilder.CreateZExt(offset,baddr->getType());
+          }
+          Value* nidx = headerbuilder.CreateAdd(baddr, offset);
+          
+          auto globalptr = headerbuilder.CreateGEP(GEPI->getPointerOperand(), nidx);
+          auto globalval = headerbuilder.CreateLoad(globalptr);
+          Value* Ntidx = TIDX;
+          if (baddr->getType() != Ntidx->getType()){
+            Ntidx = headerbuilder.CreateZExt(TIDX,baddr->getType());
+          }
+          auto shrptr = headerbuilder.CreateGEP(shr, {ConstantInt::get(baddr->getType(),0), Ntidx});
+          headerbuilder.CreateStore(globalval, shrptr);
+          for (int k = 1; k<(ivinc+tidinc); k++){
+            nidx = headerbuilder.CreateAdd(nidx, ConstantInt::get(baddr->getType(),TILEDIM));
+            auto gptr = headerbuilder.CreateGEP(GEPI->getPointerOperand(), nidx);
+            auto gval = headerbuilder.CreateLoad(gptr);
+            Ntidx = headerbuilder.CreateAdd(Ntidx, ConstantInt::get(baddr->getType(),TILEDIM));
+            auto sptr = headerbuilder.CreateGEP(shr, {ConstantInt::get(baddr->getType(),0), Ntidx});
+            headerbuilder.CreateStore(gval, sptr);
+          }
+
+          IRBuilder<> innerbuilder(GEPI);
+          auto tidxTile = innerbuilder.CreateMul(TIDX, ConstantInt::get(TIDX->getType(), tidinc));
+          auto nsidx = innerbuilder.CreateAdd(tidxTile, newIV);
+          if (nsidx->getType() != baddr->getType()){
+            nsidx = innerbuilder.CreateZExt(nsidx, baddr->getType());
+          }
+          auto Ngepi = innerbuilder.CreateGEP(shr, {ConstantInt::get(baddr->getType(), 0), nsidx});
+          
+          bool gepialive = false;
+          std::vector<Instruction*> to_erase;
+          for (auto U : GEPI->users()){
+            if (CAST(LoadInst, LI, U)){
+              auto NLI = new LoadInst(LI->getType(),Ngepi,"", LI);
+              LI->replaceAllUsesWith(NLI);
+              to_erase.push_back(LI);
+            } else {
+              gepialive = true;
+              errs() << "why is this alive?\n";
+            }
+          }
+          for(auto LI: to_erase){
+            LI->eraseFromParent();
+          }
+          if (!gepialive)
+            GEPI->eraseFromParent();
         } else if (ivinc > 0 && ivinc <= 8 && tidinc > 0){
           
         }
@@ -424,7 +480,7 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
 
     
 
-  }
+  }}
   bool Changed = false;
   return Changed;
 }
