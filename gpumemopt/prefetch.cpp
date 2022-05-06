@@ -72,6 +72,7 @@ namespace {
     Loop *prefLoop;
     BasicBlock *prefBlock;
     Instruction *prefIfInsertPt;
+    ICmpInst *prefLoopGuardCmp; // TODO: may not exist
   };
 }
 
@@ -423,14 +424,25 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                   IV->getType()->dump();
                   CI->getType()->dump();
                   PHINode *prefIV = prefLoop->getInductionVariable(*SE);
-                  Value *IV_exd = Builder.CreateZExt(prefIV, CI->getType());
-                  Value *prefAddrInc2 = Builder.CreateAdd(prefAddrInc, CI);
-                  Value *prefAddrInc3 = Builder.CreateMul(IV_exd, CI); // TODO: use SE->getAddExpr
+                  Value *prefAddrInc2 = Builder.CreateAdd(prefAddrInc, CI); // get next iteration by adding 1 step
 
-                  
+                  // create a new IV
+                  Builder.SetInsertPoint(prefIV->getNextNode());
+                  ConstantInt *CI_zero = ConstantInt::get(CI->getType(), 0);
+                  PHINode *NewIV = Builder.CreatePHI(CI->getType(), 2);
+                  NewIV->addIncoming(CI_zero, prefIV->getIncomingBlock(0));
+                  Builder.SetInsertPoint(prefLoopGuardCmp);
+                  Value *NewIV_next = Builder.CreateAdd(NewIV, CI_one);
+                  NewIV->addIncoming(NewIV_next, prefIV->getIncomingBlock(1));
 
+                  Builder.SetInsertPoint(prefIfInsertPt);
+                  Value *prefAddrInc3 = Builder.CreateMul(NewIV, CI); // newIV * outer step
+                  errs() << "===========================\n";
+                  prefIV->getParent()->dump();
+                  prefIfInsertPt->getParent()->dump();
+                  errs() << "===========================\n";
 
-                  Value *prefAddrInc4 = Builder.CreateAdd(prefAddrInc2, IV_exd); // TODO: add phinode for a new induction variable
+                  Value *prefAddrInc4 = Builder.CreateAdd(prefAddrInc3, prefAddrInc2); // TODO: add phinode for a new induction variable
 
                   Instruction *brTerminator = dyn_cast<Instruction>(prefBlock->getTerminator());
                   SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
@@ -496,6 +508,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
             } else if(BranchInst *loopGuardBr = dyn_cast<BranchInst>(Backedge->getTerminator())){ 
               if(loopGuardBr->isConditional()){
                 if(ICmpInst *loopGuardCmp = dyn_cast<ICmpInst>(loopGuardBr->getOperand(0))){
+                  prefLoopGuardCmp = loopGuardCmp;
                   const SCEVConstant *C;
                   ConstantInt *CI;
                   if (C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
