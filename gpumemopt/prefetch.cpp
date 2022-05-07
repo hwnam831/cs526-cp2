@@ -323,7 +323,6 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
       bool found_barrier = false;
       while(!found_barrier && BBlock->getTerminator()->getNumSuccessors() > 0){
         while(Inst->getNextNode() != nullptr) {
-          Inst = Inst->getNextNode();
           if (CallInst *CI = dyn_cast<CallInst>(Inst)){
             auto funcname = CI->getCalledFunction()->getName();
             if(funcname == "llvm.nvvm.barrier0"){
@@ -331,6 +330,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
               break;
             }
           }
+          Inst = Inst->getNextNode();
         }
         if(found_barrier)
           break;
@@ -339,6 +339,10 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
           BasicBlock *succ = *sit;
           Inst = dyn_cast<Instruction>(succ->begin());
           if(PDT->dominates(succ, BBlock)){
+            errs() << "-------\n";
+            succ->dump();
+            BBlock->dump();
+            errs() << "-------\n";
             BBlock = succ;
             found_child = true;
             break;
@@ -430,9 +434,9 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
         SE->getSCEV(gepi->getOperand(1))->dump();
         SE->getSCEVAtScope(gepi->getOperand(1), L)->dump();
         const SCEVNAryExpr  *LSCEVAddRec = dyn_cast<SCEVNAryExpr>(LSCEV);
-        if(LSCEVAddRec != nullptr){
+        if(LSCEV != nullptr){
           errs() << "finding addresses\n";
-          const SCEVAddRecExpr *expr = findAddRecExpr(LSCEVAddRec); //TODO: add check for loops 
+          const SCEVAddRecExpr *expr = findAddRecExpr(LSCEV); //TODO: add check for loops 
           if(expr != nullptr){
             errs() << "expr is: ";
             expr->dump();
@@ -543,9 +547,10 @@ errs() << ("?????????????\n");
                   ConstantInt *CI_zero = ConstantInt::get(CI->getType(), 0);
                   PHINode *NewIV = Builder.CreatePHI(CI->getType(), 2);
                   NewIV->addIncoming(CI_zero, prefIV->getIncomingBlock(0));
-                  Builder.SetInsertPoint(prefLoopGuardCmp);
+                  Builder.SetInsertPoint(prefIV->getParent()->getTerminator());
                   Value *NewIV_next = Builder.CreateAdd(NewIV, CI_one);
                   NewIV->addIncoming(NewIV_next, prefIV->getIncomingBlock(1));
+NewIV->dump();
 
                   Builder.SetInsertPoint(prefIfInsertPt);
                   Value *prefAddrInc3 = Builder.CreateMul(NewIV, CI); // newIV * outer step
@@ -567,14 +572,16 @@ errs() << ("?????????????\n");
                   gepi->setOperand(1, prefAddr);
                   LMemI->moveBefore(prefIfInsertPt);
                   //TODO: prefBlock may be nullptr
-                  
+                  Builder.SetInsertPoint(brTerminator);
+                  Value *tempAllocaPtr = Builder.CreateAlloca(ArrayType::get(gepi->getOperand(0)->getType()->getPointerElementType(), CI->getSExtValue()));
+                  tempAllocaPtr->dump();
+
                   BasicBlock *initLoopBody = SplitBlock(prefBlock, brTerminator, DT, NULL, NULL, "", false);
                   Builder.SetInsertPoint(brTerminator);
 
                   PHINode *NPN_init = Builder.CreatePHI(CI->getType(), 2);
                   NPN_init->addIncoming(ConstantInt::get(CI->getType(), dyn_cast<ConstantInt>(IV->getOperand(0))->getSExtValue()), prefBlock);
-                  Value *tempAllocaPtr = Builder.CreateAlloca(ArrayType::get(gepi->getOperand(0)->getType()->getPointerElementType(), CI->getSExtValue()));
-                  tempAllocaPtr->dump();
+                  
 
                   Value *prefAddrInc_init = Builder.CreateMul(NPN_init, CI_inner);
                   // Value *prefAddrInc2_init = Builder.CreateAdd(prefAddrInc_init, CI);
@@ -614,6 +621,16 @@ errs() << ("?????????????\n");
 
                   BB->dump();
                   loopBody->dump();
+                  errs() << "loop: \n";
+                  
+                  for (BasicBlock *bbb : L->getBlocks()) {
+                    bbb->dump();
+                  }
+                  errs() << "\nprefloop: \n";
+                  
+                  for (BasicBlock *bbb : prefLoop->getBlocks()) {
+                    bbb->dump();
+                  }
                 } else continue;
               } else continue;
 
