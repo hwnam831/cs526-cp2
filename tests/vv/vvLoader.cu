@@ -338,7 +338,7 @@ int main(int argc, char **argv)
 
     // setup execution parameters
     // num_elements = 2048;
-    dim3  grid(num_elements/32/16, 1, 1);
+    dim3  grid(num_elements/32/32, 1, 1);
     dim3  threads(32, 1, 1);
 
     void *params[] = { &d_A, &d_B, &d_C, &num_elements};

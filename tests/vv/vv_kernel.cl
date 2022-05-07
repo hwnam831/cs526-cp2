@@ -10,7 +10,7 @@
 #define idx (bidx*blockDimX+tidx)
 #define idy (bidy*blockDimY+tidy)
 #define C(y,x) C[(y)*WIDTH_C+(x)]
-#define TILE 16
+#define TILE 32
 __kernel void vv(__global float *A, __global float *B, __global float *C, int width) {
 
 	float a;
