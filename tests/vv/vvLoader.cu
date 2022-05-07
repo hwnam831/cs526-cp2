@@ -173,10 +173,13 @@ char *generatePTX(const char *ll, size_t size, const char *filename)
 
 void computeGold( float* a, float* b, const unsigned int len, float* result)
 {
+    // for (unsigned int i=0; i<len; i++) {
+    //     for (unsigned int j=0; j<len; j++) {
+    //         result[j*len+i] += a[j]*b[i];
+    //     }
+    // }
     for (unsigned int i=0; i<len; i++) {
-        for (unsigned int j=0; j<len; j++) {
-            result[j*len+i] += a[j]*b[i];
-        }
+        result[0] += a[i]*b[i];
     }
 }
 
@@ -213,14 +216,18 @@ void printDiff(float *data1, float *data2, int width, int height)
 {
   int i,j,k;
   int error_count=0;
-  for (j=0; j<height; j++) {
-    for (i=0; i<width; i++) {
-      k = j*width+i;
-      if (data1[k] != data2[k]) {
-         printf("diff(%d,%d) CPU=%4.4f, GPU=%4.4f n", i,j, data1[k], data2[k]);
-         error_count++;
-      }
-    }
+//   for (j=0; j<height; j++) {
+//     for (i=0; i<width; i++) {
+//       k = j*width+i;
+//       if (data1[k] != data2[k]) {
+//          printf("diff(%d,%d) CPU=%4.4f, GPU=%4.4f \n", i,j, data1[k], data2[k]);
+//          error_count++;
+//       }
+//     }
+//   }
+  if(data1[0] != data2[0]){
+       printf("diff(%d,%d) CPU=%4.4f, GPU=%4.4f \n", 0,0, data1[0], data2[0]);
+      error_count++;
   }
   printf(" nTotal Errors = %d n", error_count);
 }
@@ -275,7 +282,7 @@ int main(int argc, char **argv)
     
     unsigned int num_elements = WC;
     const unsigned int in_mem_size = sizeof( float) * (num_elements);
-    const unsigned int out_mem_size = sizeof( float) * (num_elements*num_elements);
+    const unsigned int out_mem_size = sizeof( float) * (num_elements);
 
     // allocate host memory to store the input data
     if ((h_A = (float*) malloc(in_mem_size)) == NULL) {
@@ -310,11 +317,14 @@ int main(int argc, char **argv)
     {
         h_A[i] = ((rand()/(float)RAND_MAX));
         h_B[i] = ((rand()/(float)RAND_MAX));
-        for( unsigned int j = 0; j < num_elements; ++j) {
-            h_C[i*num_elements+j] = ((rand()/(float)RAND_MAX));
-            reference[i*num_elements+j] = h_C[i*num_elements+j];
-            dst_data[i*num_elements+j] = h_C[i*num_elements+j];
-        }
+        // fprintf(stderr, "h_A[%d]=%f, h_B[%d]=%f\n", i, h_A[i], i, h_B[i]);
+        // for( unsigned int j = 0; j < num_elements; ++j) {
+        //     // h_C[i*num_elements+j] = ((rand()/(float)RAND_MAX));
+            h_C[i] = 0;
+            // fprintf(stderr, "h_C[%d]=%f\n", i, h_C[i]);
+            reference[i] = h_C[i];
+            dst_data[i] = h_C[i];
+        // }
     }
 
     checkCudaErrors(cuMemAlloc(&d_A, in_mem_size));
@@ -327,26 +337,31 @@ int main(int argc, char **argv)
     checkCudaErrors(cuMemcpyHtoD(d_C, dst_data, out_mem_size));
 
     // setup execution parameters
-    dim3  grid(num_elements/16, num_elements/16, 1);
-    dim3  threads(16, 16, 1);
+    // num_elements = 2048;
+    dim3  grid(num_elements/32/16, 1, 1);
+    dim3  threads(32, 1, 1);
 
     void *params[] = { &d_A, &d_B, &d_C, &num_elements};
     // Launch the kernel
     checkCudaErrors(cuLaunchKernel(hKernel, grid.x, grid.y, grid.z, threads.x, threads.y, threads.z, 0, NULL, params, NULL)); 
+    checkCudaErrors(cuMemcpyDtoH(h_C, d_C, out_mem_size));
 
     cudaDeviceSynchronize();
     fprintf(stderr, "CUDA kernel launched\n");
+
     // Copy the result back to the host
-    checkCudaErrors(cuMemcpyDtoH(h_C, d_C, out_mem_size));
+    for(int i=1; i<num_elements; i++){
+        h_C[0] += h_C[i];
+    }
 
     // compute reference solution
     computeGold(h_A, h_B, num_elements, reference);
-    float epsilon = 1e-4;
-    bool res = cutComparefe(reference, h_C, num_elements*num_elements, epsilon);
+    float epsilon = 1e-3;
+    bool res = cutComparefe(&reference[0], &h_C[0], 1, epsilon);
     printf("Test %s \n", res ? "PASSED" : "FAILED");
 
     if (!res) {
-        printDiff(reference, h_C,  num_elements, num_elements);
+        printDiff(&reference[0], &h_C[0],  1, 1);
     }
     
     // Cleanup

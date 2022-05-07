@@ -346,7 +346,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
         if(is_tiled){
           if(GetElementPtrInst *gepi = dyn_cast<GetElementPtrInst>(LPtrOp)){
             const SCEV *LSCEV = SE->getSCEVAtScope(gepi->getOperand(1), prefLoop);
-            LSCEV->dump();
+            if(LSCEV != nullptr) LSCEV->dump();
           }
           continue;
         }
@@ -370,7 +370,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
         errs() << "not supported for prefetch.\n";
         continue;
       }
-
+errs() << "adding prefetch\n";
       PHINode *IV = L->getCanonicalInductionVariable();
       if(IV == nullptr && to_tile) continue;
 
@@ -382,6 +382,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
           const SCEVAddRecExpr *expr = findAddRecExpr(LSCEV); //TODO: add check for loops 
           if(expr != nullptr){
             if(to_tile) {
+errs() << "to tile!\n";
               const SCEV *LSCEV_inner = SE->getSCEVAtScope(gepi->getOperand(1), L);
               const SCEV *initLSCEV = LSCEV_inner;
               //TODO: this while loop should not be needed here, just to be safe
@@ -396,21 +397,45 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                   const SCEVConstant *C, *C_inner;
                   ConstantInt *CI, *CI_inner;
                   if (C = dyn_cast<SCEVConstant>(expr->getStepRecurrence(*SE))) {
-                    if (C_inner = dyn_cast<SCEVConstant>(expr_inner->getStepRecurrence(*SE))) {                      
-                      CI = ConstantInt::get(SE->getContext(), C->getAPInt());
-                      CI_inner = ConstantInt::get(SE->getContext(), C_inner->getAPInt());
+                    if (C_inner = dyn_cast<SCEVConstant>(expr_inner->getStepRecurrence(*SE))) {            
+                      C->getValue()->getSExtValue();          
+                      CI = C->getValue();
+                      CI_inner = C_inner->getValue();
+                      // ConstantInt::get(SE->getContext(), C_inner->getAPInt());
                     } else continue;
                   } else continue;
 
                   BranchInst *loopGuardBr;
+                  IRBuilder<> Builder(Inst->getNextNode()); // insert after the barrier instruction
+                  if(CI->getType() != gepi->getOperand(1)->getType()){ //TODO
+                    errs() << "ci type different\n";
+                    CI = dyn_cast<ConstantInt>(Builder.CreateZExt(CI, gepi->getOperand(1)->getType())); 
+                  }
+                  if(CI_inner->getType() != gepi->getOperand(1)->getType()){ //TODO
+                    errs() << "ci_inner type different\n";
+                    CI_inner = dyn_cast<ConstantInt>(Builder.CreateZExt(CI_inner, gepi->getOperand(1)->getType())); 
+                  }
                   if(prefIfInsertPt == nullptr){
                     if(loopGuardBr = dyn_cast<BranchInst>(prefBackBlock->getTerminator())){ 
                       if(loopGuardBr->isConditional()){
                         if(ICmpInst *loopGuardCmp = dyn_cast<ICmpInst>(loopGuardBr->getOperand(0))){
+                            CI->getType()->dump();
+                            loopGuardCmp->getOperand(0)->getType()->dump();
+                            CI_inner->getType()->dump();
+                          
                           prefLoopGuardCmp = loopGuardCmp;
-                          IRBuilder<> Builder(Inst->getNextNode()); // insert after the barrier instruction
+                          
                           dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0)->dump();
-                          Value *iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+                          Value *iter_next;
+                          if(isa<PHINode>(loopGuardCmp->getOperand(0))){
+                            errs() << "is phinode\n";
+                            // Value *iter_exd = Builder.CreateZExt(loopGuardCmp->getOperand(0), gepi->getOperand(1)->getType()); 
+                            iter_next = Builder.CreateAdd(loopGuardCmp->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+                          } else {
+                            errs() << "is not phinode\n";
+                            iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+                          }
+                          // Value *iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
                           Value *check_res = Builder.CreateICmp(loopGuardCmp->getPredicate(), iter_next, loopGuardCmp->getOperand(1));
                           Instruction *ThenTerm , *ElseTerm;
                           SplitBlockAndInsertIfThenElse(check_res, (dyn_cast<ICmpInst>(check_res))->getNextNode(), &ThenTerm, &ElseTerm);
@@ -429,15 +454,18 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                     }
                   } else {
                     errs() << "prefIfInsertPt is not null\n";
+                    if(!isa<BranchInst>(prefIfInsertPt)){ //TODO: shouldn't need this check here.
+                      errs() << "prefIfInsertPt is not a branch instruction.\n";
+                      continue;
+                    }
                   }
                   BasicBlock *prefIfInsertB = prefIfInsertPt->getParent();
                   BasicBlock *loopBody = SplitBlock(prefIfInsertB, prefIfInsertPt, DT, NULL, NULL, "", false);
-                  IRBuilder<> Builder(prefIfInsertPt);
+                  Builder.SetInsertPoint(prefIfInsertPt);
                   PHINode *NPN = Builder.CreatePHI(CI->getType(), 2);
                   NPN->addIncoming(ConstantInt::get(CI->getType(), dyn_cast<ConstantInt>(IV->getOperand(0))->getSExtValue()), prefIfInsertB);
                   ConstantInt *CI_one = ConstantInt::get(CI->getType(), 1);
                   Value *prefAddrInc = Builder.CreateMul(NPN, CI_inner);
-
                   PHINode *prefIV = prefLoop->getInductionVariable(*SE);
                   Value *prefAddrInc2 = Builder.CreateAdd(prefAddrInc, CI); // get next iteration by adding 1 step
                   if(prefIV == nullptr) {
@@ -466,8 +494,10 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                   SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
                   Value *PrefPtrValue = SCEVE.expandCodeFor(initLSCEV, gepi->getOperand(1)->getType(), brTerminator);
                   PrefPtrValue->dump();
+                  prefAddrInc4->dump();
+errs() << "here\n";
                   Value *prefAddr = Builder.CreateAdd(PrefPtrValue, prefAddrInc4); // TODO: not right?
-
+errs() << "here\n";
                   gepi->moveBefore(prefIfInsertPt);
                   gepi->setOperand(1, prefAddr);
                   LMemI->moveBefore(prefIfInsertPt);
@@ -479,7 +509,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
 
                   PHINode *NPN_init = Builder.CreatePHI(CI->getType(), 2);
                   NPN_init->addIncoming(ConstantInt::get(CI->getType(), dyn_cast<ConstantInt>(IV->getOperand(0))->getSExtValue()), prefBlock);
-                  
+errs() << "here\n";        
 
                   Value *prefAddrInc_init = Builder.CreateMul(NPN_init, CI_inner);
                   Value *prefAddr_init = Builder.CreateAdd(PrefPtrValue, prefAddrInc_init);
@@ -487,23 +517,30 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                   Value *initPrefVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), initPrefAddr);
                   Value *tempGEP_init = Builder.CreateGEP(tempAllocaPtr, {ConstantInt::get(NPN_init->getType(),0), NPN_init});
                   Builder.CreateStore(initPrefVal, tempGEP_init);
-
+errs() << "here\n";
                   Value *NPN_it_init = Builder.CreateAdd(NPN_init, CI_one);
                   Value *icmp_init = Builder.CreateICmpEQ(NPN_it_init, CI);
                   Builder.CreateCondBr(icmp_init, dyn_cast<BasicBlock>(brTerminator->getOperand(0)), initLoopBody);
                   NPN_init->addIncoming(NPN_it_init, initLoopBody);
                   brTerminator->eraseFromParent();
 
-
+errs() << "here\n";
                   Builder.SetInsertPoint(prefIfInsertPt);
                   Value *tempGEP = Builder.CreateGEP(tempAllocaPtr, {ConstantInt::get(NPN->getType(),0), NPN});
                   Builder.CreateStore(LMemI, tempGEP);
+                  errs() << "here?\n";
                   Value *NPN_it = Builder.CreateAdd(NPN, CI_one);
+                  errs() << "here?\n";
                   Value *icmp = Builder.CreateICmpEQ(NPN_it, CI);
+                  errs() << "here?\n";
+                  prefIfInsertPt->dump();
+                  prefIfInsertPt->getOperand(0)->dump();
                   Builder.CreateCondBr(icmp, dyn_cast<BasicBlock>(prefIfInsertPt->getOperand(0)), loopBody);
+                  errs() << "here?\n";
                   NPN->addIncoming(NPN_it, loopBody);
+                  errs() << "here?\n";
                   prefIfInsertPt->eraseFromParent();
-
+errs() << "here-\n";
                   Builder.SetInsertPoint(SMemI);
                   Value *tempGEP2 = Builder.CreateGEP(tempAllocaPtr, {ConstantInt::get(NPN->getType(),0), IV});
                   Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), tempGEP2);
@@ -526,7 +563,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                   } else continue;
                   Changed = true;
                   const SCEV *initLSCEV = createInitialPrefAddr(LSCEV);
-
+errs() << "not to tile!\n";
                   SCEVExpander SCEVE(*SE, BB->getModule()->getDataLayout(), "prefaddr");
                   Value *PrefPtrValue = SCEVE.expandCodeFor(initLSCEV, gepi->getOperand(1)->getType(), Incoming->getTerminator());
 
@@ -543,7 +580,17 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
                   Builder.SetInsertPoint(Inst->getNextNode()); // insert after the barrier instruction
 
                   dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0)->dump();
-                  Value *iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+
+                  // Value *iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+                  Value *iter_next;
+                  if(isa<PHINode>(loopGuardCmp->getOperand(0))){
+                    errs() << "is phinode\n";
+                    iter_next = Builder.CreateAdd(loopGuardCmp->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+                  } else {
+                    errs() << "is not phinode\n";
+                    iter_next = Builder.CreateAdd(dyn_cast<Instruction>(loopGuardCmp->getOperand(0))->getOperand(0), ConstantInt::get(loopGuardCmp->getOperand(0)->getType(), C->getValue()->getSExtValue()));
+                  }
+
                   Value *check_res = Builder.CreateICmp(loopGuardCmp->getPredicate(), iter_next, loopGuardCmp->getOperand(1));
                   Instruction *ThenTerm , *ElseTerm;
                   SplitBlockAndInsertIfThenElse(check_res, (dyn_cast<ICmpInst>(check_res))->getNextNode(), &ThenTerm, &ElseTerm);
