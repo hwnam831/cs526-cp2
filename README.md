@@ -23,8 +23,16 @@ matrix transpose (transpose)
 ~~reconstruct image (demosaic)~~ <br>
 ~~find the regional maxima (imregionmax)~~
 
+### To Run Test
 `cd tests`  
 Run all tests: `make all`  
 Clean all output files: `make cleanAll`  
 Run individial test (take tmv for example): `cd tmv && make`  
-Clean individial test outputs (take tmv for example): `cd tmv && make clean`  
+- if Test PASSED is printed, then test passes. Otherwise, if test fails, Test FAILED will be printed.
+Clean individial test outputs (take tmv for example): `cd tmv && make clean`
+Run test case with the original naive kernel (take tmv for example): `cd tmv && make original`
+Profile the execution time for naive, coalesced, and prefetched kernels (take tmv for example): `cd tmv && make profile`
+To generate intermeidate ll files after each pass (take tmv for example): `cd tmv && make debug`
+- The ll for original naive kernel can be found in tmv.nvvm.ll
+- The ll for coalesced kernel can be found in tmv.coal.ll
+- The ll for prefetched kernel can be found in tmv.opt.ll
