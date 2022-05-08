@@ -1,4 +1,6 @@
 # cs526-cp2
+## Environment
+Quadro P2200 with CUDA 11.6 and Ubuntu 21.10
 
 ## Requirements
 LLVM configured as `cmake -S llvm -B build -G Ninja -DCMAKE_INSTALL_PREFIX="~/llvm" -DLLVM_ENABLE_PROJECTS="clang"`  
@@ -26,8 +28,10 @@ Example configure script (change --prefix and --with-llvm-config accordingly):
 13. Inside cs526-cp2, run ./cmake.sh
 14. Go ./tests
 15. Follow the "To Run Test Guide" below to run test.
-
-git clone and update llvm home and cuda home
+* You could have following directory structure:
+  ├── cs526-cp2
+  ├── llvm
+  ├── libclc
 
 ## Test Suite
 ##### The list of algorithms tested in the paper (https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.870.3097&rep=rep1&type=pdf):
