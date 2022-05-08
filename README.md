@@ -28,7 +28,7 @@ Example configure script (change --prefix and --with-llvm-config accordingly):
 13. Inside cs526-cp2, run ./cmake.sh
 14. Go ./tests
 15. Follow the "To Run Test Guide" below to run test.
-* You could have following directory structure: <br>
+* You could have the following directory structure: <br>
   ├── cs526-cp2 <br>
   ├── llvm <br>
   ├── libclc <br>
