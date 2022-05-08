@@ -25,8 +25,8 @@ matrix transpose (transpose)
 
 ### To Run Test
 `cd tests`  
-Run all tests: `make all`  
-Clean all output files: `make cleanAll`  
+* Run all tests: `make all`  
+  * Clean all output files: `make cleanAll`  
 Run individial test (take tmv for example): `cd tmv && make`  
 - if Test PASSED is printed, then test passes. Otherwise, if test fails, Test FAILED will be printed.<br>
 Clean individial test outputs (take tmv for example): `cd tmv && make clean`
