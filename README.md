@@ -20,8 +20,8 @@ reduction (reduction)
 matrix equation solver (strsm)  
 convolution (conv)  
 matrix transpose (transpose)  
-~~reconstruct image (demosaic)~~
-~~find the regional maxima (imregionmax)~~  
+~~reconstruct image (demosaic)~~ <br>
+~~find the regional maxima (imregionmax)~~
 
 `cd tests`  
 Run all tests: `make all`  
