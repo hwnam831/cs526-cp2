@@ -18,10 +18,10 @@ matrix-vector multiplication (mv)
 vector-vector multiplication (vv)  
 reduction (reduction)  
 matrix equation solver (strsm)  
-convolution (conv/conv_16_16)  
+convolution (conv)  
 matrix transpose (transpose)  
-reconstruct image (demosaic)  
-find the regional maxima (imregionmax)  
+~~reconstruct image (demosaic)~~
+~~find the regional maxima (imregionmax)~~  
 
 `cd tests`  
 Run all tests: `make all`  
