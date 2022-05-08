@@ -307,8 +307,8 @@ int main(int argc, char **argv)
     checkCudaErrors(cuMemcpyHtoD(d_A, h_A, mem_size_A));
 
     // setup execution parameters
-    dim3 threads(16, 16);
-    dim3 grid(WC / threads.x, HC / threads.y);
+    dim3 threads(32, 1);
+    dim3 grid(WC / threads.x, HC / TILE);
 
     int Width_A = WA;
     void *params[] = { &d_A, &d_C, &Width_A };

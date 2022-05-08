@@ -9,16 +9,17 @@
 #define tidy (get_local_id(1))
 #define A(y,x) A[(y)*WIDTH_A+(x)]
 #define C(y,x) C[(y)*WIDTH_C+(x)]
-#define blockDimX 16
-#define blockDimY 16
+#define blockDimX 32
+#define blockDimY 1
 #define idx (bidx*blockDimX+tidx)
 #define idy (bidy*blockDimY+tidy)
 __kernel void tr(__global float *A, __global float *C, int width) {
 	int i = 0;
 	float sum = 0;
-
-	sum = A(idx, idy);
-	C(idy, idx) = sum;
+	for(i=0; i<TILE; i++){
+		sum = A(idx, idy*TILE+i);
+		C(idy*TILE+i, idx) = sum;
+	}
 }
 
 

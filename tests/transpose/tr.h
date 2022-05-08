@@ -5,7 +5,7 @@
 
 // Thread block size
 #define BLOCK_SIZE 16
-
+#define TILE 128
 #define MW 2048
 // Matrix dimensions
 // (chosen as multiples of the thread block size for simplicity)

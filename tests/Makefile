@@ -44,8 +44,8 @@ DEBUGOPTS =  -verify -loop-simplify -licm -mem2reg -inline -adce -sccp
 test: $(TARGET)Loader $(TARGET).opt.ptx.s
 	./$(TARGET)Loader $(TARGET).opt.ptx.s $(TARGET)
 
-original: $(TARGET)Loader $(TARGET).nvvm.ptx.s
-	./$(TARGET)Loader $(TARGET).nvvm.ptx.s $(TARGET)
+original: $(TARGET)Loader $(TARGET).unroll.ptx.s
+	nvprof ./$(TARGET)Loader $(TARGET).unroll.ptx.s $(TARGET)
 
 
 profile: $(TARGET)Loader $(TARGET).unroll.ptx.s $(TARGET).coal.ptx.s $(TARGET).opt.ptx.s

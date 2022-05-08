@@ -10,19 +10,18 @@
 #define idx (bidx*blockDimX+tidx)
 #define idy (bidy*blockDimY+tidy)
 #define C(y,x) C[(x)]
-#define TILE 32
+
 __kernel void vv(__global float *A, __global float *B, __global float *C, int width) {
 
 	float a;
 	float b;
-	float sum = 0;
 
 	for (int i=0; i<TILE; i++){
 		a = A[idx*TILE+i];
 		b = B[idx*TILE+i];
-		sum += a*b;
+		C(0, idx*TILE+i) = a*b;
 	}
-	C(0, idx) += sum;
+	
 }
 
 

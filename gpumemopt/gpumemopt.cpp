@@ -326,6 +326,9 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
               auto NLI = new LoadInst(LI->getType(),Ngepi,"", LI);
               LI->replaceAllUsesWith(NLI);
               to_erase.push_back(LI);
+            } else if (CAST(StoreInst, SI, U)){
+              auto NSI = new StoreInst(SI->getValueOperand(), Ngepi,SI);
+              to_erase.push_back(SI);
             } else {
               gepialive = true;
               errs() << "why is this alive?\n";
