@@ -15,7 +15,7 @@ Example configure script (change --prefix and --with-llvm-config accordingly):
 ## Step-by-Step guide to setup environment
 1. Download LLVM 12.0.0 release (llvm-project-12.0.0.src.tar.xz) from https://github.com/llvm/llvm-project/releases/tag/llvmorg-12.0.0
 2. Unzip LLVM folder and let's call the unzipped folder llvm
-3. Configure by `cmake -S llvm -B build -G Ninja -DCMAKE_INSTALL_PREFIX="~/llvm" -DLLVM_ENABLE_PROJECTS="clang"` (can change the prefix to anywhere you want your LLVMROOT in the ./tests/Makefile to be.
+3. Configure by `cmake -S llvm -B build -G Ninja -DCMAKE_INSTALL_PREFIX="~/llvm" -DLLVM_ENABLE_PROJECTS="clang"` (can change the prefix to anywhere you want your LLVMROOT in the ./tests/Makefile to be).
 4. Inside llvm, build by `cmake --build build && cmake --install build`
 5. Install the CUDA 11.6 Toolkit from https://developer.nvidia.com/cuda-downloads using the corresponding runfile and following the command there.
 6. Say CUDA is installed at `/usr/local/cuda`, then this is your CUDAROOT in ./tests/Makefile
