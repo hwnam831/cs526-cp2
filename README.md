@@ -10,6 +10,25 @@ libclc (https://github.com/llvm-mirror/libclc) built (only nvptx) and installed 
 Example configure script (change --prefix and --with-llvm-config accordingly):  
 `./configure.py --prefix=/home/hwnam/llvm --with-llvm-config=/home/hwnam/llvm/bin/llvm-config nvptx--nvidiacl nvptx64--nvidiacl`
 
+## Step-by-Step guide to setup environment
+1. Download LLVM 12.0.0 release (llvm-project-12.0.0.src.tar.xz) from https://github.com/llvm/llvm-project/releases/tag/llvmorg-12.0.0
+2. Unzip LLVM folder and let's call the unzipped folder llvm
+3. Configure by `cmake -S llvm -B build -G Ninja -DCMAKE_INSTALL_PREFIX="~/llvm" -DLLVM_ENABLE_PROJECTS="clang"` (can change the prefix to anywhere you want your LLVMROOT in the ./tests/Makefile to be.
+4. Inside llvm, build by `cmake --build build && cmake --install build`
+5. Install the CUDA 11.6 Toolkit from https://developer.nvidia.com/cuda-downloads using the corresponding runfile and following the command there.
+6. Say CUDA is installed at `/usr/local/cuda`, then this is your CUDAROOT in ./tests/Makefile
+7. `sudo apt install mesa-common-dev`
+8. Git clone our code from https://github.com/hwnam831/cs526-cp2.git
+9. Make sure LLVMROOT and CUDAROOT is updated in the cs526-cp2/tests/Makefile.
+10. Git clone libclc from https://github.com/llvm-mirror/libclc.git
+11. Inside libclc, run `./configure.py --prefix=~/llvm --with-llvm-config=~/llvm/bin/llvm-config nvptx--nvidiacl nvptx64--nvidiacl`
+12. Then make && make install
+13. Inside cs526-cp2, run ./cmake.sh
+14. Go ./tests
+15. Follow the "To Run Test Guide" below to run test.
+
+git clone and update llvm home and cuda home
+
 ## Test Suite
 ##### The list of algorithms tested in the paper (https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.870.3097&rep=rep1&type=pdf):
 transpose matrix vector (tmv)  
@@ -23,12 +42,12 @@ matrix transpose (transpose)
 ~~reconstruct image (demosaic)~~ <br>
 ~~find the regional maxima (imregionmax)~~
 
-### To Run Test
+### To Run Test Guide
 `cd tests`  
 * Run all tests: `make all`  
 * Clean all output files: `make cleanAll`  
 * Run individial test (take tmv for example): `cd tmv && make`  
-  * if Test PASSED is printed, then test passes. Otherwise, if test fails, Test FAILED will be printed.<br>
+  * If Test PASSED is printed, then test passes. Otherwise, if test fails, Test FAILED will be printed.<br>
 * Clean individial test outputs (take tmv for example): `cd tmv && make clean`
 * Run test case with the original naive kernel (take tmv for example): `cd tmv && make original`
 * Profile the execution time for naive, coalesced, and prefetched kernels (take tmv for example): `cd tmv && make profile`
