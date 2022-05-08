@@ -1,6 +1,6 @@
 # cs526-cp2
 ## Environment
-Quadro P2200 with CUDA 11.6 and Ubuntu 21.10
+Quadro P2200 and Intel(R) Xeon(R) W-2245 CPU with CUDA 11.6 and Ubuntu 21.10
 
 ## Requirements
 LLVM configured as `cmake -S llvm -B build -G Ninja -DCMAKE_INSTALL_PREFIX="~/llvm" -DLLVM_ENABLE_PROJECTS="clang"`  
