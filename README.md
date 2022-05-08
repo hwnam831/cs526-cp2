@@ -28,7 +28,7 @@ matrix transpose (transpose)
 Run all tests: `make all`  
 Clean all output files: `make cleanAll`  
 Run individial test (take tmv for example): `cd tmv && make`  
-- if Test PASSED is printed, then test passes. Otherwise, if test fails, Test FAILED will be printed.
+- if Test PASSED is printed, then test passes. Otherwise, if test fails, Test FAILED will be printed.<br>
 Clean individial test outputs (take tmv for example): `cd tmv && make clean`
 Run test case with the original naive kernel (take tmv for example): `cd tmv && make original`
 Profile the execution time for naive, coalesced, and prefetched kernels (take tmv for example): `cd tmv && make profile`
