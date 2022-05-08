@@ -251,14 +251,14 @@ const SCEV *GPUMemPrefetching::createInitialPrefAddr(const SCEV * expr){
 
 bool GPUMemPrefetching::runOnLoop(Loop *L) {
   bool Changed = false;
-
+  errs() << "\nstart-------------------------------------\n";
+  L->dump();
   //TODO: find immediate dominator of loop header?
   BasicBlock *Incoming = nullptr, *Backedge = nullptr;
   if (!L->getIncomingAndBackEdge(Incoming, Backedge)){
     errs() << "unsupported loop form.\n";
     return Changed;
   }
-
   // In order for SCEVExpander to be able to expand code for the computation of
   // the first prefetch address, these values need to be available here
   // Note that we start from -O1 which will do LICM for bidx/bidy/tidx/tidy
@@ -328,6 +328,12 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
         continue;
       }
       
+      if(prefIfInsertPt != nullptr){
+        errs() << "-prefIfInsertPt is: ";
+        prefIfInsertPt->dump();
+      } else {
+        errs() << "-prefIfInsertPt is null\n";
+      }
       bool to_tile = false;
       if(L->contains(Inst)){
         prefLoop = L;
@@ -348,6 +354,7 @@ bool GPUMemPrefetching::runOnLoop(Loop *L) {
             const SCEV *LSCEV = SE->getSCEVAtScope(gepi->getOperand(1), prefLoop);
             if(LSCEV != nullptr) LSCEV->dump();
           }
+          errs() << "process later\n";
           continue;
         }
       } else if(prefLoop != nullptr && prefLoop->contains(Inst)){ // outerloop has prefetched access
@@ -415,6 +422,7 @@ errs() << "to tile!\n";
                     errs() << "ci_inner type different\n";
                     CI_inner = dyn_cast<ConstantInt>(Builder.CreateZExt(CI_inner, gepi->getOperand(1)->getType())); 
                   }
+
                   if(prefIfInsertPt == nullptr){
                     if(loopGuardBr = dyn_cast<BranchInst>(prefBackBlock->getTerminator())){ 
                       if(loopGuardBr->isConditional()){
@@ -441,6 +449,8 @@ errs() << "to tile!\n";
                           SplitBlockAndInsertIfThenElse(check_res, (dyn_cast<ICmpInst>(check_res))->getNextNode(), &ThenTerm, &ElseTerm);
 
                           prefIfInsertPt = ElseTerm;
+                          errs() << "!!!!! prefIfInsertPt is assigned here1\n";
+                          prefIfInsertPt->dump();
                         } else {
                           errs() << "loop backedge block terminator's first operand is not icmp.\n";
                           break;
@@ -535,16 +545,26 @@ errs() << "here\n";
                   errs() << "here?\n";
                   prefIfInsertPt->dump();
                   prefIfInsertPt->getOperand(0)->dump();
-                  Builder.CreateCondBr(icmp, dyn_cast<BasicBlock>(prefIfInsertPt->getOperand(0)), loopBody);
+                  // prefIfInsertPt->eraseFromParent(); //TODO:?
+                  
+                  BasicBlock *newblk = SplitBlock(prefIfInsertPt->getParent(), prefIfInsertPt, DT, NULL, NULL, "", false);
+                  Builder.SetInsertPoint(dyn_cast<Instruction>(icmp)->getParent()->getTerminator());
+                  Builder.CreateCondBr(icmp, newblk, loopBody);
+                  dyn_cast<Instruction>(icmp)->getParent()->getTerminator()->eraseFromParent();
                   errs() << "here?\n";
                   NPN->addIncoming(NPN_it, loopBody);
                   errs() << "here?\n";
-                  prefIfInsertPt->eraseFromParent();
+                  
 errs() << "here-\n";
+prefIfInsertPt->dump();
+prefIfInsertPt->getParent()->dump();
+newblk->dump();
+dyn_cast<Instruction>(icmp)->getParent()->dump();
                   Builder.SetInsertPoint(SMemI);
                   Value *tempGEP2 = Builder.CreateGEP(tempAllocaPtr, {ConstantInt::get(NPN->getType(),0), IV});
                   Value *tempVal = Builder.CreateLoad(gepi->getOperand(0)->getType()->getPointerElementType(), tempGEP2);
                   SMemI->setOperand(0, tempVal);
+
                 } else continue;
               } else continue;
 
@@ -596,6 +616,7 @@ errs() << "not to tile!\n";
                   SplitBlockAndInsertIfThenElse(check_res, (dyn_cast<ICmpInst>(check_res))->getNextNode(), &ThenTerm, &ElseTerm);
 
                   prefIfInsertPt = ElseTerm; // TODO: add check for if this already existed
+                  errs() << "!!!!! prefIfInsertPt is assigned here2\n";
                   Builder.SetInsertPoint(ElseTerm);
                   LMemI->moveBefore(ElseTerm);
                   Builder.CreateStore(LMemI, tempAllocaPtr);
@@ -632,6 +653,11 @@ bool GPUMemPrefetching::runOnFunction(Function &F) {
   PDT = &getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
   DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   bool Changed = false;
+  prefIfInsertPt = nullptr;
+  prefLoop = nullptr;
+  prefBlock = nullptr;
+  prefBackBlock = nullptr;
+  prefLoopGuardCmp = nullptr; 
   for (Loop *I : *LI)
     for (Loop *L : depth_first(I))
       Changed |= runOnLoop(L);

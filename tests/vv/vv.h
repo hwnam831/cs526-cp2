@@ -5,7 +5,8 @@
 // Thread block size
 #define BLOCK_SIZE 16
 
-#define MW 2048
+// #define MW 2048
+#define MW 2097152
 // Matrix dimensions
 // (chosen as multiples of the thread block size for simplicity)
 #define WA MW // Matrix A width

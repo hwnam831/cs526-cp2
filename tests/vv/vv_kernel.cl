@@ -1,6 +1,6 @@
 #include "vv.h"
 
-#define WIDTH_C WC
+#define WIDTH_C 262144
 #define bidx (get_group_id(0))
 #define bidy (get_group_id(1))
 #define tidx (get_local_id(0))
@@ -9,7 +9,7 @@
 #define blockDimY 1
 #define idx (bidx*blockDimX+tidx)
 #define idy (bidy*blockDimY+tidy)
-#define C(y,x) C[(y)*WIDTH_C+(x)]
+#define C(y,x) C[(x)]
 #define TILE 32
 __kernel void vv(__global float *A, __global float *B, __global float *C, int width) {
 

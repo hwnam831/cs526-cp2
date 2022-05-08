@@ -280,7 +280,7 @@ int main(int argc, char **argv)
     // Initialize the device and get a handle to the kernel
     checkCudaErrors(initCUDA(&hContext, &hDevice, &hModule, &hKernel, ptx, argv[2]));
     
-    unsigned int num_elements = WC;
+    unsigned int num_elements = 262144;
     const unsigned int in_mem_size = sizeof( float) * (num_elements);
     const unsigned int out_mem_size = sizeof( float) * (num_elements);
 
@@ -337,7 +337,7 @@ int main(int argc, char **argv)
     checkCudaErrors(cuMemcpyHtoD(d_C, dst_data, out_mem_size));
 
     // setup execution parameters
-    // num_elements = 2048;
+    // num_elements = 262144;
     dim3  grid(num_elements/32/32, 1, 1);
     dim3  threads(32, 1, 1);
 
@@ -356,7 +356,7 @@ int main(int argc, char **argv)
 
     // compute reference solution
     computeGold(h_A, h_B, num_elements, reference);
-    float epsilon = 1e-3;
+    float epsilon = 1e-4;
     bool res = cutComparefe(&reference[0], &h_C[0], 1, epsilon);
     printf("Test %s \n", res ? "PASSED" : "FAILED");
 
