@@ -14,7 +14,7 @@ LLVMAS  = $(LLVMROOT)/bin/llvm-as
 LLVMDIS = $(LLVMROOT)/bin/llvm-dis
 LLVMOPT = $(LLVMROOT)/bin/opt
 OPTLIB ?= $(LEVEL)/build/gpumemopt/libGPUMEMOPT.so
-SUBDIRS := vv transpose conv conv_16_16 demosaic imregionmax matmul mv reduction strsm tmv
+SUBDIRS := vv transpose conv matmul mv reduction strsm tmv
 
 define RUNFOREACH
     for DIR in $(SUBDIRS); do \

@@ -1,3 +1,0 @@
-TARGET=imregionmax
-include ../Makefile
-

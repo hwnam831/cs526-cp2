@@ -1,3 +1,0 @@
-TARGET=demosaic
-include ../Makefile
-

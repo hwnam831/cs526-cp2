@@ -1,2 +1,0 @@
-TARGET=square
-include ../Makefile

@@ -1,3 +1,0 @@
-TARGET=conv
-include ../Makefile
-
