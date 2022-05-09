@@ -11,10 +11,18 @@
 #include "llvm/IR/IRBuilder.h"
 using namespace llvm;
 
+/**
+ * @brief Recursively follows def-use chain of linear operations to mark scalar evolution coefficients.
+ * 
+ * @param base Base scalar
+ * @param map Resulting mapt that Incr[Val] is a scalar coefficient of Val to the root base scalar
+ * @param incr Scalar coefficient to the root 
+ * @return true 
+ * @return false 
+ */
 bool AnalyzeIncrement(Value* base, ValueMap<Value*, int>& map, int incr){
   bool isChanged = false;
-  //base->dump();
-  //errs() << "Analyzed increment : " << incr << "\n\n";
+
   for (auto U: base->users()){
     if (map.count(U)){
       continue;
@@ -87,11 +95,12 @@ bool AnalyzeIncrement(Value* base, ValueMap<Value*, int>& map, int incr){
   return isChanged;
 }
 
+//Optimization fuction for FindBaseAddress.
+//Checks if the Value is zero if both IV and TID are zero
 bool isZero(Value* ADDR, ValueMap<Value*, int>& IVincr, ValueMap<Value*, int>& TIDincr){
   if(CAST(ConstantInt, CINT, ADDR)){
     return !(CINT->getSExtValue());
   } else if(IVincr.count(ADDR) == 0 && TIDincr.count(ADDR) == 0){
-    errs() << ADDR->getName();
     return false;
   } else if (IVincr.count(ADDR) && IVincr[ADDR] == 0){
     return true;
@@ -135,36 +144,33 @@ bool isZero(Value* ADDR, ValueMap<Value*, int>& IVincr, ValueMap<Value*, int>& T
   return false;
 }
 
-//This may introduce a lot of dead code. May need ADCE after this
-//NULL means this is const zero
-//TODO: use IRbuilder to add instructions at the beginning of the loop block
+/**
+ * @brief Finds base address of the GEP address, inserting the instruction for the base address calculation
+ * 
+ * @param builder builder for inserting the base address calculation
+ * @param ADDR GEP address to analyze
+ * @param IVincr 
+ * @param TIDincr 
+ * @return Value* Resulting base address instruction
+ */
 Value* FindBaseAddress(IRBuilder<>& builder, Value* ADDR, ValueMap<Value*, int>& IVincr, ValueMap<Value*, int>& TIDincr){
   if (isZero(ADDR, IVincr, TIDincr)){
     return NULL;
   }
   if(CAST(ConstantInt, CINT, ADDR)){
-    errs() << CINT->getSExtValue();
     return ADDR;
   } else if(IVincr.count(ADDR) == 0 && TIDincr.count(ADDR) == 0){
-    errs() << ADDR->getName();
-    //ADDR->dump();
     return ADDR;
   } else if (IVincr.count(ADDR) && IVincr[ADDR] == 0){
-    errs() << "0";
     return NULL;
   } else if (TIDincr.count(ADDR) && TIDincr[ADDR] == 0){
-    errs() << "0";
     return NULL;
   }
   if(CAST(SExtInst, SE, ADDR)){
-    errs() << "(SEXT ";
     Value *op1 = FindBaseAddress(builder, SE->getOperand(0), IVincr, TIDincr);
-    errs() << ")";
     return builder.CreateSExt(op1, SE->getDestTy());
   } else if(CAST(ZExtInst, ZE, ADDR)){
-    errs() << "(ZEXT ";
     Value *op1 = FindBaseAddress(builder, ZE->getOperand(0), IVincr, TIDincr);
-    errs() << ")";
     return builder.CreateZExt(op1, ZE->getDestTy());
   }else if (CAST(BinaryOperator,BO,ADDR)) {
     Value* op1 = BO->getOperand(0);
@@ -179,19 +185,13 @@ Value* FindBaseAddress(IRBuilder<>& builder, Value* ADDR, ValueMap<Value*, int>&
         } else if (isZero(op2, IVincr, TIDincr)){
           return FindBaseAddress(builder, op1, IVincr, TIDincr);
         }
-        errs() << "(Add ";
         Value* lhs = FindBaseAddress(builder, op1, IVincr, TIDincr);
-        errs() << ", ";
         Value* rhs = FindBaseAddress(builder, op2, IVincr, TIDincr);
-        errs() << ")";
         return builder.CreateAdd(lhs, rhs);
         break;}
       case Instruction::BinaryOps::Sub : {
-        errs() << "(Sub ";
         Value* lhs = FindBaseAddress(builder, op1, IVincr, TIDincr);
-        errs() << ", ";
         Value* rhs = FindBaseAddress(builder, op2, IVincr, TIDincr);
-        errs() << ")";
         return builder.CreateSub(lhs, rhs);
         break;}
       case Instruction::BinaryOps::Or : {
@@ -203,11 +203,8 @@ Value* FindBaseAddress(IRBuilder<>& builder, Value* ADDR, ValueMap<Value*, int>&
         } else if (isZero(op2, IVincr, TIDincr)){
           return FindBaseAddress(builder, op1, IVincr, TIDincr);
         }
-        errs() << "(Or ";
         Value* lhs = FindBaseAddress(builder, op1, IVincr, TIDincr);
-        errs() << ", ";
         Value* rhs = FindBaseAddress(builder, op2, IVincr, TIDincr);
-        errs() << ")";
         return builder.CreateOr(lhs, rhs);
         break;}
       case Instruction::BinaryOps::Mul: {
@@ -215,11 +212,8 @@ Value* FindBaseAddress(IRBuilder<>& builder, Value* ADDR, ValueMap<Value*, int>&
             isZero(op2, IVincr, TIDincr)){
             return NULL;
         }
-        errs() << "(Mul ";
         Value* lhs = FindBaseAddress(builder, op1, IVincr, TIDincr);
-        errs() << ", ";
         Value* rhs = FindBaseAddress(builder, op2, IVincr, TIDincr);
-        errs() << ")";
         return builder.CreateMul(lhs, rhs);
         break;}
       case Instruction::BinaryOps::Shl: {
@@ -228,11 +222,8 @@ Value* FindBaseAddress(IRBuilder<>& builder, Value* ADDR, ValueMap<Value*, int>&
         } else if (isZero(op2, IVincr, TIDincr)){
           return FindBaseAddress(builder, op1, IVincr, TIDincr);
         }
-        errs() << "(Shl ";
         Value* lhs = FindBaseAddress(builder, op1, IVincr, TIDincr);
-        errs() << ", ";
         Value* rhs = FindBaseAddress(builder, op2, IVincr, TIDincr);
-        errs() << ")";
         return builder.CreateShl(lhs, rhs);
         break;}
       default: {

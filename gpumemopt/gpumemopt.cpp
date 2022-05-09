@@ -1,21 +1,6 @@
-//===- ScalarReplAggregates.cpp - Scalar Replacement of Aggregates --------===//
+//===- gpumemopt.cpp - GPU Memory Coalescing --------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file was developed by the LLVM research group and is distributed under
-// the University of Illinois Open Source License. See LICENSE.TXT for details.
-//
-//===----------------------------------------------------------------------===//
-//
-// This transformation implements the well known scalar replacement of
-// aggregates transformation.  This xform breaks up alloca instructions of
-// structure type into individual alloca instructions for
-// each member (if possible).  Then, if possible, it transforms the individual
-// alloca instructions into nice clean scalar SSA form.
-//
-// This combines an SRoA algorithm with Mem2Reg because they
-// often interact, especially for C++ programs.  As such, this code
-// iterates between SRoA and Mem2Reg until we run out of things to promote.
+// Implements GPU memory coalescing optimization pass for llvm-compiled naive opencl kernels
 //
 //===----------------------------------------------------------------------===//
 
@@ -91,6 +76,11 @@ static RegisterPass<GPUMemOpt> GMO("gpumemopt",
 			    true /* does modify the CFG */,
 			    false /* transformation, not just analysis */);
 
+/** Given the basic block, TID scalar evolution coefficients (TIDincr), and IV scalar evolution coefficients (IVincr),
+* The function finds noncoalesced GEP instructions and insert them to the worklist (Noncoalesced)
+* It also records the base addresses of such GEPIs (Baseaddr), and the last position to be loop strip-mined (splitpoint)
+* returns: if there is any uncoalesced access
+**/
 bool FindNoncoalesced(BasicBlock* B, ValueMap<Value*, int>& TIDincr,
   ValueMap<Value*, int>& IVincr, std::vector<GetElementPtrInst*>& Noncoalesced,
   ValueMap<GetElementPtrInst*, Value*>& Baseaddr, Instruction* splitpoint){
@@ -104,15 +94,11 @@ bool FindNoncoalesced(BasicBlock* B, ValueMap<Value*, int>& TIDincr,
         int ivinc = IVincr.count(IDX) ? IVincr[IDX] : 0;
         int tidinc = TIDincr.count(IDX) ? TIDincr[IDX] : 0;
         
+        //If this condition holds, the access is already coalesced
         if(ivinc % 64 == 0 && tidinc == 1){
-          //errs() << "This GEPI is coalesced\n";
-          //errs() << "IV increment coefficient: " << ivinc << '\n';
-          //errs() << "Thread ID.x increment coefficient: " << tidinc << '\n';
-          //FindBaseAddress(IDX, IVincr, TIDincr);
+
         } else {
-          //errs() << "This GEPI is not coalesced\n";
-          //errs() << "IV increment coefficient: " << ivinc << '\n';
-          //errs() << "Thread ID.x increment coefficient: " << tidinc << '\n';
+
           Noncoalesced.push_back(GEPI);
           IRBuilder<> builder(splitpoint);
           Value* baddr = FindBaseAddress(builder, IDX, IVincr, TIDincr);
@@ -124,8 +110,7 @@ bool FindNoncoalesced(BasicBlock* B, ValueMap<Value*, int>& TIDincr,
           } else if (CAST(Instruction, newpoint, baddr)){
             splitpoint = newpoint;
           }
-          //errs() << "Base address calculated: ";
-          //baddr->dump();
+
           Baseaddr.insert(std::make_pair(GEPI, baddr));
         }
       }
@@ -134,6 +119,17 @@ bool FindNoncoalesced(BasicBlock* B, ValueMap<Value*, int>& TIDincr,
   return !Noncoalesced.empty();
 }
 
+/**
+ * @brief strip-mine the loop into subloops of 32 iterations
+ * 
+ * @param B 
+ * @param IV 
+ * @param splitpoint end point of the inner loop
+ * @param DT 
+ * @param innerloop pointer to store the new inner loop basic block
+ * @param outercond pointer to store the new condition basic block
+ * @return Instruction* returns IV PHINode of the new inner loop
+ */
 Instruction* TileLoop(BasicBlock* B,PHINode* IV, Instruction* splitpoint, DominatorTree& DT,
     BasicBlock* innerloop, BasicBlock* outercond){
   llvm::StringRef basename = B->getName();
@@ -232,14 +228,13 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
   for (BasicBlock& block : F){
     for (Instruction& inst : block){
       if (CAST(CallInst, CI, &inst)){
-        //CI->dump();
+
         auto funcname = CI->getCalledFunction()->getName();
         //errs() << funcname << "\n";
         if(funcname == "llvm.nvvm.read.ptx.sreg.tid.x"){
           if (TIDincr.count(CI) == 0){
             // Zero marks that this is the exact TID.x
             TIDincr.insert(std::make_pair(CI, 0));
-            errs() << "Found tid.x\n";
             AnalyzeIncrement(CI, TIDincr, 1);
           }
           if (TIDX == nullptr){
@@ -261,14 +256,14 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
     //Zero marks that this is the exact IV
     IVincr.insert(std::make_pair(IV, 0));
 
-    //errs() << "Found induction variable\n";
     AnalyzeIncrement(IV, IVincr, 1);
     BasicBlock *B = IV->getParent();
     auto basename = B->getName();
     Instruction* splitpoint = &*(B->getFirstInsertionPt());
+
     //Start loop transformation.
     //Create outer loops, move necessary instructions
-    //Make i++ -> i+=16
+    //Make i++ -> i+=32
     //Introduce internal IV, replacealluseswith
     if(FindNoncoalesced(B, TIDincr, IVincr, Noncoalesced, Baseaddr, splitpoint)){
 
@@ -285,8 +280,8 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
         int tidinc = TIDincr.count(IDX) ? TIDincr[IDX] : 0;
         Value* sharedAddr;
         Value* sharedIdx;
-        GEPI->dump();
-        errs() << "IVIncr : " << ivinc << "\tTIDincr: " << tidinc <<"\n";
+
+        //Case 1: 1-D segment
         if (ivinc == 1 && tidinc == 0){
           auto shrtype = ArrayType::get(GEPI->getResultElementType(), TILEDIM);
           GlobalVariable* shr = new GlobalVariable(*F.getParent(),shrtype, false,
@@ -340,6 +335,7 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
           if (!gepialive)
             GEPI->eraseFromParent();
           
+        //Case 2: 2-D segment that needs a loop to load the segment
         } else if (ivinc==1 && tidinc > 8){
           //create loop and reverse iv/tid
           auto shrtype = ArrayType::get(GEPI->getResultElementType(), TILEDIM*TILEDIM);
@@ -414,6 +410,7 @@ bool GPUMemCoalescing::runOnFunction(Function &F) {
           ReplaceInstWithInst(loadloop->getTerminator(), newbranch);
           LIV->addIncoming(ConstantInt::get(IV->getType(), 0), loadloop->getPrevNode());
           LIV->addIncoming(increment, loadloop);
+        //Case 3: 2-D small segment whose shared memory preload is unrolled
         } else if (ivinc ==1 && tidinc <= 8 && tidinc > 0){
           auto shrtype = ArrayType::get(GEPI->getResultElementType(), (ivinc+tidinc)*TILEDIM);
           GlobalVariable* shr = new GlobalVariable(*F.getParent(),shrtype, false,
